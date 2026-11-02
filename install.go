@@ -29,6 +29,9 @@ const pythonVersion = "3.12"
 
 var packageRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}(==[0-9][0-9A-Za-z.+-]{0,31})?$`)
 
+// Пакет npm: имя без области (@scope/…) и, по желанию, версия: express, express@5
+var npmPackageRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}(@[0-9][0-9A-Za-z.+-]{0,31})?$`)
+
 type InstallStatus struct {
 	State string `json:"state"` // ready | installing | error
 	Step  string `json:"step,omitempty"`
@@ -45,6 +48,11 @@ type Installer struct {
 }
 
 func NewInstaller(ws *Workspace) *Installer { return &Installer{ws: ws} }
+
+func npmName(p string) string {
+	name, _, _ := strings.Cut(p, "@")
+	return name
+}
 
 func normPkg(p string) string {
 	name, _, _ := strings.Cut(p, "==")
@@ -64,6 +72,13 @@ func (in *Installer) missing(lang string, pkgs []string) (needRuntime bool, need
 		}
 	case "javascript":
 		needRuntime = s.Node == ""
+	case "node":
+		needRuntime = s.Node == ""
+		for _, p := range pkgs {
+			if !s.Npm[npmName(p)] {
+				needPkgs = append(needPkgs, p)
+			}
+		}
 	}
 	return
 }
@@ -151,7 +166,7 @@ func (in *Installer) install(lang string, needRuntime bool, pkgs []string) error
 			}
 			logf("Библиотеки готовы: %s", strings.Join(names, ", "))
 		}
-	case "javascript":
+	case "javascript", "node":
 		if needRuntime {
 			in.setStep("Скачиваю Node.js")
 			version, err := in.installNode()
@@ -165,6 +180,24 @@ func (in *Installer) install(lang string, needRuntime bool, pkgs []string) error
 			}
 			logf("Node.js %s готов.", version)
 		}
+		if len(pkgs) > 0 {
+			names := make([]string, len(pkgs))
+			for i, p := range pkgs {
+				names[i] = npmName(p)
+			}
+			in.setStep("Ставлю " + strings.Join(names, ", "))
+			if err := in.npmInstall(pkgs); err != nil {
+				return fmt.Errorf("не удалось поставить %s: %w", strings.Join(names, ", "), err)
+			}
+			s := ws.LoadState()
+			for _, n := range names {
+				s.Npm[n] = true
+			}
+			if err := ws.SaveState(s); err != nil {
+				return err
+			}
+			logf("Пакеты готовы: %s", strings.Join(names, ", "))
+		}
 	default:
 		return fmt.Errorf("неизвестный язык %q", lang)
 	}
@@ -173,10 +206,33 @@ func (in *Installer) install(lang string, needRuntime bool, pkgs []string) error
 
 // uv запускает менеджер Python с окружением, направленным в папку
 func (in *Installer) uv(args ...string) error {
+	return in.tool(in.ws.UvExe(), in.ws.Root, nil, args...)
+}
+
+// npmInstall ставит пакеты npm в envs/node из официального реестра, без скриптов установки пакетов
+func (in *Installer) npmInstall(pkgs []string) error {
+	dir := in.ws.NodePackagesDir()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	// Свой package.json — чтобы npm ставил сюда, а не искал проект в папках выше
+	manifest := filepath.Join(dir, "package.json")
+	if _, err := os.Stat(manifest); err != nil {
+		if err := os.WriteFile(manifest, []byte("{\n  \"private\": true\n}\n"), 0o644); err != nil {
+			return err
+		}
+	}
+	args := append([]string{in.ws.NpmCli(), "install", "--no-audit", "--no-fund", "--ignore-scripts",
+		"--loglevel=error", "--registry=https://registry.npmjs.org/"}, pkgs...)
+	return in.tool(in.ws.NodeExe(), dir, map[string]string{"npm_config_update_notifier": "false"}, args...)
+}
+
+// tool запускает установщик с окружением, направленным в папку
+func (in *Installer) tool(exe, dir string, extra map[string]string, args ...string) error {
 	_ = os.MkdirAll(in.ws.Path("cache", "tmp"), 0o755)
-	cmd := exec.Command(in.ws.UvExe(), args...)
-	cmd.Dir = in.ws.Root
-	cmd.Env = in.ws.Env(nil)
+	cmd := exec.Command(exe, args...)
+	cmd.Dir = dir
+	cmd.Env = in.ws.Env(extra)
 	hideWindow(cmd)
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -468,6 +524,18 @@ func validPackages(pkgs []string) bool {
 	}
 	for _, p := range pkgs {
 		if !packageRE.MatchString(p) {
+			return false
+		}
+	}
+	return true
+}
+
+func validNpmPackages(pkgs []string) bool {
+	if len(pkgs) > 20 {
+		return false
+	}
+	for _, p := range pkgs {
+		if !npmPackageRE.MatchString(p) {
 			return false
 		}
 	}

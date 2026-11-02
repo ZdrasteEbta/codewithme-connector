@@ -74,7 +74,8 @@ with open(result_path, "w", encoding="utf-8") as f:
     json.dump({"status": status, "error": error, "timeMs": round(elapsed * 1000), "images": images}, f)
 `
 
-// Повторяет public/runner/js-worker.js сайта: код ученика и тесты в одной области видимости
+// Код ученика и тесты в одной области видимости, как в public/runner/js-worker.js сайта,
+// но внутри async-функции (с 0.2.0): тесты ждут промисы и таймеры через await
 const nodeDriver = `
 const fs = require("fs");
 const [codePath, testsPath, resultPath] = process.argv.slice(2);
@@ -97,20 +98,110 @@ const check = (call, got, expected) => {
     throw new AssertionError("__check__" + JSON.stringify({ call: String(call), got: format(got), expected: format(expected) }));
   }
 };
-const done = (r) => fs.writeFileSync(resultPath, JSON.stringify({ output: output(), ...r }));
-const source = code + "\n;\n__runTests();\n" + (tests || "");
+let finished = false;
+const done = (r) => {
+  if (finished) return;
+  finished = true;
+  try { fs.writeFileSync(resultPath, JSON.stringify({ output: output(), ...r })); } finally { process.exit(0); }
+};
 let testsStarted = false;
-const started = performance.now();
-try {
-  const fn = new Function("console", "assert", "check", "output", "__runTests", "require", "process", source);
-  fn(fakeConsole, assert, check, output, () => (testsStarted = true), undefined, undefined);
-  if (tests && !testsStarted) {
-    done({ error: "Проверка не запустилась: программа завершилась раньше тестов. Уберите return вне функций." });
-  } else done({});
-} catch (err) {
+const fail = (err) => {
   const text = err instanceof Error ? err.name + ": " + err.message : String(err);
   if (testsStarted && err instanceof AssertionError) done({ testError: err.message });
   else done({ error: text });
+};
+// Ошибки в таймерах и необработанные промисы — тоже ошибки программы
+process.on("uncaughtException", fail);
+process.on("unhandledRejection", fail);
+// Async-функция: в тестах (и в коде) можно писать await — темы про промисы, async/await и таймеры
+const source = code + "\n;\nawait __runTests();\n" + (tests || "");
+const AsyncFunction = (async () => {}).constructor;
+let fn;
+try {
+  fn = new AsyncFunction("console", "assert", "check", "output", "__runTests", "require", "process", source);
+} catch (err) {
+  fail(err);
+}
+if (fn) {
+  fn(fakeConsole, assert, check, output, () => { testsStarted = true; }, undefined, undefined).then(() => {
+    if (tests && !testsStarted) {
+      return done({ error: "Проверка не запустилась: программа завершилась раньше тестов. Уберите return вне функций." });
+    }
+    // Дожидаемся отложенных console.log из setTimeout, но не вечно: забытый setInterval не держит программу
+    process.once("beforeExit", () => done({}));
+    setTimeout(() => done({}), 1000).unref();
+  }, fail);
+}
+`
+
+// Курсы Node.js и Express (language: node): настоящие require и process, пакеты из envs/node,
+// await на верхнем уровне; программа ждёт таймеры и колбэки, но запущенный сервер не держит её дольше секунды
+const nodeAppDriver = `
+const fs = require("fs");
+const path = require("path");
+const { createRequire } = require("module");
+const [codePath, testsPath, resultPath, modulesDir] = process.argv.slice(2);
+const code = fs.readFileSync(codePath, "utf8");
+const tests = testsPath === "-" ? "" : fs.readFileSync(testsPath, "utf8");
+class AssertionError extends Error {}
+class ExitSignal { constructor(code) { this.code = code; } }
+function format(value) {
+  if (typeof value === "string") return value;
+  if (value === undefined) return "undefined";
+  if (typeof value === "function") return value.toString();
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+const lines = [];
+const log = (...args) => lines.push(args.map(format).join(" "));
+const fakeConsole = { log, info: log, warn: log, error: log, debug: log, table: log };
+const assert = (condition, message) => { if (!condition) throw new AssertionError(message || "assert failed"); };
+const output = () => lines.join("\n");
+const check = (call, got, expected) => {
+  if (JSON.stringify(got) !== JSON.stringify(expected)) {
+    throw new AssertionError("__check__" + JSON.stringify({ call: String(call), got: format(got), expected: format(expected) }));
+  }
+};
+const realExit = process.exit.bind(process);
+let finished = false;
+const finish = (r) => {
+  if (finished) return;
+  finished = true;
+  try { fs.writeFileSync(resultPath, JSON.stringify({ output: output(), ...r })); } finally { realExit(0); }
+};
+let testsStarted = false;
+const fail = (err) => {
+  if (err instanceof ExitSignal) {
+    return finish(err.code ? { error: "Программа завершилась с кодом " + err.code + " (process.exit)" } : {});
+  }
+  const text = err instanceof Error ? err.name + ": " + err.message : String(err);
+  if (testsStarted && err instanceof AssertionError) finish({ testError: err.message });
+  else finish({ error: text });
+};
+process.on("uncaughtException", fail);
+process.on("unhandledRejection", fail);
+// process.exit в коде ученика завершает программу, но результат всё равно записывается
+process.exit = (c) => { throw new ExitSignal(c ?? process.exitCode ?? 0); };
+process.argv = [process.argv[0], path.join(process.cwd(), "main.js")];
+const mod = { exports: {} };
+// Пакеты из npm ищутся в envs/node/node_modules папки CodeWithMe
+const req = createRequire(path.resolve(modulesDir, "main.js"));
+const source = code + "\n;\nawait __runTests();\n" + (tests || "");
+const AsyncFunction = (async () => {}).constructor;
+let fn;
+try {
+  fn = new AsyncFunction("console", "assert", "check", "output", "__runTests", "require", "module", "exports", "__filename", "__dirname", source);
+} catch (err) {
+  fail(err);
+}
+if (fn) {
+  fn(fakeConsole, assert, check, output, () => { testsStarted = true; }, req, mod, mod.exports, path.join(process.cwd(), "main.js"), process.cwd()).then(() => {
+    if (tests && !testsStarted) {
+      return finish({ error: "Проверка не запустилась: программа завершилась раньше тестов. Уберите return вне функций." });
+    }
+    // Ждём таймеры и колбэки (чтение файлов, события), но не больше секунды: запущенный сервер работал бы вечно
+    process.once("beforeExit", () => finish({}));
+    setTimeout(() => finish({}), 1000).unref();
+  }, fail);
 }
 `
 
@@ -213,13 +304,17 @@ func (ws *Workspace) Run(req RunRequest, runs *Runs) RunResult {
 	var args []string
 	extra := map[string]string{}
 	switch req.Language {
-	case "javascript":
+	case "javascript", "node":
 		exe = ws.NodeExe()
 		testsPath := "-"
 		if req.Tests != nil && *req.Tests != "" {
 			testsPath = write("_cwm_tests.js", *req.Tests)
 		}
-		args = []string{write("_cwm_driver.js", nodeDriver), write("main.js", req.Code), testsPath, resultPath}
+		if req.Language == "node" {
+			args = []string{write("_cwm_driver.js", nodeAppDriver), write("main.js", req.Code), testsPath, resultPath, ws.NodePackagesDir()}
+		} else {
+			args = []string{write("_cwm_driver.js", nodeDriver), write("main.js", req.Code), testsPath, resultPath}
+		}
 	default:
 		exe = ws.PythonExe()
 		checkPath := "-"
@@ -323,7 +418,7 @@ func (ws *Workspace) Run(req RunRequest, runs *Runs) RunResult {
 		}
 		return RunResult{Status: "re", Stdout: out, Stderr: errOut, Error: fmt.Sprintf("Программа аварийно завершилась (код %d)", code)}
 	}
-	if req.Language == "javascript" {
+	if req.Language == "javascript" || req.Language == "node" {
 		var r struct {
 			Output    string `json:"output"`
 			Error     string `json:"error"`

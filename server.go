@@ -70,6 +70,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"modules":   map[string]bool{},
 			"node":      st.Node,
 			"packages":  sortedPackages(st.Packages),
+			"npm":       sortedPackages(st.Npm),
 		})
 		return
 	case r.Method == http.MethodPost && r.URL.Path == "/pair":
@@ -99,12 +100,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Language string   `json:"language"`
 			Pip      []string `json:"pip"`
+			Npm      []string `json:"npm"`
 		}
-		if !readJSON(r, &req) || (req.Language != "python" && req.Language != "javascript") || !validPackages(req.Pip) {
+		if !readJSON(r, &req) || !validLanguage(req.Language) || !validPackages(req.Pip) || !validNpmPackages(req.Npm) {
 			reply(400, map[string]any{"error": "bad-request"})
 			return
 		}
-		reply(200, s.inst.Ensure(req.Language, req.Pip))
+		pkgs := req.Pip
+		if req.Language == "node" {
+			pkgs = req.Npm
+		}
+		reply(200, s.inst.Ensure(req.Language, pkgs))
 
 	case r.Method == http.MethodPost && r.URL.Path == "/run":
 		var req RunRequest
@@ -114,7 +120,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if req.Language == "" {
 			req.Language = "python"
 		}
-		if !ok || (req.Language != "python" && req.Language != "javascript") {
+		if !ok || !validLanguage(req.Language) {
 			reply(400, map[string]any{"error": "bad-request"})
 			return
 		}
@@ -236,4 +242,9 @@ func osName() string {
 		return "Linux"
 	}
 	return runtime.GOOS
+}
+
+// python, javascript (как в браузере: без require) или node (курсы Node.js и Express)
+func validLanguage(lang string) bool {
+	return lang == "python" || lang == "javascript" || lang == "node"
 }

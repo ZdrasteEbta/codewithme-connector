@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var version = "0.1.0" // заменяется при сборке релиза: -ldflags "-X main.version=…"
+var version = "0.2.0" // заменяется при сборке релиза: -ldflags "-X main.version=…"
 
 const site = "https://codewithme.app"
 
@@ -55,7 +55,7 @@ func main() {
 		fail("Порты 47615–47619 заняты: возможно, коннектор или мост уже запущен в другом окне.")
 	}
 
-	origins := map[string]bool{site: true}
+	origins := map[string]bool{site: true, "https://www.codewithme.app": true}
 	if *dev {
 		for _, o := range devOrigins {
 			origins[o] = true

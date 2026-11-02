@@ -19,7 +19,8 @@ const readme = `Папка CodeWithMe (https://codewithme.app)
 
   courses/    ваш код, условия задач, примеры тестов и история отправок
   runtimes/   Python и Node.js — ставятся при первом запуске кода на этом языке
-  envs/       библиотеки Python, которые вы учите (numpy, pygame и т. д.)
+  envs/       библиотеки Python (numpy, pygame и т. д.) и пакеты npm (express),
+              которые вы учите
   tools/      uv — программа, которая ставит Python и библиотеки
   cache/      скачанные файлы и временные файлы программ
   .cwm/       настройки коннектора
@@ -115,6 +116,8 @@ type State struct {
 	Python   bool            `json:"python"`
 	Node     string          `json:"node,omitempty"`
 	Packages map[string]bool `json:"packages"`
+	// Пакеты npm в envs/node (express)
+	Npm map[string]bool `json:"npm,omitempty"`
 }
 
 func (w *Workspace) LoadState() State {
@@ -138,6 +141,14 @@ func (w *Workspace) LoadState() State {
 			s.Node = ""
 		}
 	}
+	if s.Npm == nil {
+		s.Npm = map[string]bool{}
+	}
+	for name := range s.Npm {
+		if _, err := os.Stat(filepath.Join(w.NodePackagesDir(), "node_modules", name, "package.json")); err != nil || s.Node == "" {
+			delete(s.Npm, name)
+		}
+	}
 	return s
 }
 
@@ -158,6 +169,17 @@ func (w *Workspace) NodeExe() string {
 		return w.Path("runtimes", "node", "node.exe")
 	}
 	return w.Path("runtimes", "node", "bin", "node")
+}
+
+// NodePackagesDir — папка с package.json и node_modules для пакетов npm курсов
+func (w *Workspace) NodePackagesDir() string { return w.Path("envs", "node") }
+
+// NpmCli — npm, который входит в архив Node.js
+func (w *Workspace) NpmCli() string {
+	if runtime.GOOS == "windows" {
+		return w.Path("runtimes", "node", "node_modules", "npm", "bin", "npm-cli.js")
+	}
+	return w.Path("runtimes", "node", "lib", "node_modules", "npm", "bin", "npm-cli.js")
 }
 
 func (w *Workspace) UvExe() string {

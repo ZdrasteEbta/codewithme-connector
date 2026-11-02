@@ -78,6 +78,15 @@ func TestTokenRequired(t *testing.T) {
 	if got := do(s, "POST", "/ensure", site, "127.0.0.1:47615", tok, `{"language":"python","pip":["--index-url=http://x"]}`).Code; got != 400 {
 		t.Errorf("option-like package name accepted: %d", got)
 	}
+	for _, pkg := range []string{"--registry=http://x", "@evil/pkg", "git+https://x/y.git", "../x", "express@latest; rm"} {
+		body := `{"language":"node","npm":["` + pkg + `"]}`
+		if got := do(s, "POST", "/ensure", site, "127.0.0.1:47615", tok, body).Code; got != 400 {
+			t.Errorf("npm package %q accepted: %d", pkg, got)
+		}
+	}
+	if !validNpmPackages([]string{"express", "express@5", "express@5.1.0"}) {
+		t.Error("plain npm package names rejected")
+	}
 }
 
 func TestPairingLocksAfterWrongCodes(t *testing.T) {
