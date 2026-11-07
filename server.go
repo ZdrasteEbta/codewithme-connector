@@ -69,6 +69,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"paired":    s.pairing.Valid(token),
 			"modules":   map[string]bool{},
 			"node":      st.Node,
+			"rust":      st.Rust,
 			"packages":  sortedPackages(st.Packages),
 			"npm":       sortedPackages(st.Npm),
 		})
@@ -244,7 +245,7 @@ func osName() string {
 	return runtime.GOOS
 }
 
-// python, javascript (как в браузере: без require) или node (курсы Node.js и Express)
+// python, javascript (как в браузере: без require), node (курсы Node.js и Express) или rust
 func validLanguage(lang string) bool {
-	return lang == "python" || lang == "javascript" || lang == "node"
+	return lang == "python" || lang == "javascript" || lang == "node" || lang == "rust"
 }

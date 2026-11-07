@@ -1,6 +1,6 @@
 package main
 
-// Ленивая установка: Python, Node.js и библиотеки ставятся в папку только тогда,
+// Ленивая установка: Python, Node.js, Rust и библиотеки ставятся в папку только тогда,
 // когда ученик впервые запускает код на этом языке или в курсе с этой библиотекой.
 
 import (
@@ -72,6 +72,8 @@ func (in *Installer) missing(lang string, pkgs []string) (needRuntime bool, need
 		}
 	case "javascript":
 		needRuntime = s.Node == ""
+	case "rust":
+		needRuntime = s.Rust == ""
 	case "node":
 		needRuntime = s.Node == ""
 		for _, p := range pkgs {
@@ -197,6 +199,20 @@ func (in *Installer) install(lang string, needRuntime bool, pkgs []string) error
 				return err
 			}
 			logf("Пакеты готовы: %s", strings.Join(names, ", "))
+		}
+	case "rust":
+		if needRuntime {
+			in.setStep("Скачиваю Rust")
+			version, err := in.installRust()
+			if err != nil {
+				return fmt.Errorf("не удалось поставить Rust: %w", err)
+			}
+			s := ws.LoadState()
+			s.Rust = version
+			if err := ws.SaveState(s); err != nil {
+				return err
+			}
+			logf("Rust %s готов.", version)
 		}
 	default:
 		return fmt.Errorf("неизвестный язык %q", lang)

@@ -283,6 +283,9 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 }
 
 func (ws *Workspace) Run(req RunRequest, runs *Runs) RunResult {
+	if req.Language == "rust" {
+		return ws.runRust(req, runs)
+	}
 	// Папку временных файлов могли удалить (чистка диска) — создаём заново
 	if err := os.MkdirAll(ws.Path("cache", "tmp"), 0o755); err != nil {
 		return RunResult{Status: "env-error", Error: err.Error()}

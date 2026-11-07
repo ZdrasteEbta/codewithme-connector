@@ -18,7 +18,7 @@ const readme = `Папка CodeWithMe (https://codewithme.app)
 Здесь лежит всё, что коннектор CodeWithMe поставил и создал на этом компьютере:
 
   courses/    ваш код, условия задач, примеры тестов и история отправок
-  runtimes/   Python и Node.js — ставятся при первом запуске кода на этом языке
+  runtimes/   Python, Node.js и Rust — ставятся при первом запуске кода на этом языке
   envs/       библиотеки Python (numpy, pygame и т. д.) и пакеты npm (express),
               которые вы учите
   tools/      uv — программа, которая ставит Python и библиотеки
@@ -115,6 +115,8 @@ func (w *Workspace) Env(extra map[string]string) []string {
 type State struct {
 	Python   bool            `json:"python"`
 	Node     string          `json:"node,omitempty"`
+	// Версия Rust в runtimes/rust
+	Rust string `json:"rust,omitempty"`
 	Packages map[string]bool `json:"packages"`
 	// Пакеты npm в envs/node (express)
 	Npm map[string]bool `json:"npm,omitempty"`
@@ -139,6 +141,11 @@ func (w *Workspace) LoadState() State {
 	if s.Node != "" {
 		if _, err := os.Stat(w.NodeExe()); err != nil {
 			s.Node = ""
+		}
+	}
+	if s.Rust != "" {
+		if _, err := os.Stat(w.RustcExe()); err != nil {
+			s.Rust = ""
 		}
 	}
 	if s.Npm == nil {

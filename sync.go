@@ -19,7 +19,7 @@ import (
 var (
 	segmentRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$`)
 	verdictRE = regexp.MustCompile(`^[A-Za-z-]{1,20}$`)
-	extRE     = regexp.MustCompile(`^(py|js|html)$`)
+	extRE     = regexp.MustCompile(`^(py|js|html|rs)$`)
 )
 
 type taskInfo struct {
