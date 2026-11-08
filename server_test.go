@@ -56,7 +56,7 @@ func TestOriginAndHostChecks(t *testing.T) {
 		{"", "127.0.0.1:47615", 403},
 		{"https://evil.example", "127.0.0.1:47615", 403},
 		{"http://localhost:3000", "127.0.0.1:47615", 403}, // без --dev
-		{site, "evil.example:47615", 403},                  // DNS rebinding
+		{site, "evil.example:47615", 403},                 // DNS rebinding
 	}
 	for _, c := range cases {
 		if got := do(s, "GET", "/status", c.origin, c.host, tok, "").Code; got != c.want {
@@ -155,6 +155,83 @@ func TestFileSyncKeepsEditorChanges(t *testing.T) {
 	}
 }
 
+func TestRustCratesOnlyFromBuiltInKits(t *testing.T) {
+	s, tok := newTestServer(t)
+	bad := []string{
+		`{"language":"rust","crates":["evil"]}`,
+		`{"language":"rust","crates":["macroquad","macroquad"]}`,
+		`{"language":"rust","crates":["macroquad = { git = \"https://x\" }"]}`,
+		`{"language":"python","crates":["macroquad"]}`,
+	}
+	for _, body := range bad {
+		if got := do(s, "POST", "/ensure", site, "127.0.0.1:47615", tok, body).Code; got != 400 {
+			t.Errorf("ensure %s accepted: %d", body, got)
+		}
+	}
+	run := `{"runId":"r1","language":"rust","code":"fn main(){}","timeLimitMs":1000,"outputLimitBytes":1000,"crates":["serde"]}`
+	if got := do(s, "POST", "/run", site, "127.0.0.1:47615", tok, run).Code; got != 400 {
+		t.Errorf("run with unknown crate accepted: %d", got)
+	}
+	if !validCrates("rust", []string{"macroquad"}) || !validCrates("rust", nil) || !validCrates("python", nil) {
+		t.Error("built-in kit rejected")
+	}
+	// Без Rust и cargo набор не готов, и запуск игры честно говорит «не установлено»
+	res := s.ws.Run(RunRequest{RunID: "r2", Language: "rust", Code: "fn main(){}", TimeLimitMs: 1000, OutputLimitBytes: 1000, Crates: []string{"macroquad"}}, s.runs)
+	if res.Status != "env-error" || res.Error != "not-installed" {
+		t.Errorf("game without kit: %+v", res)
+	}
+}
+
+func TestKitsArePinned(t *testing.T) {
+	for name, k := range rustKits {
+		if !strings.Contains(k.toml, `"=`) {
+			t.Errorf("%s: версии в Cargo.toml должны быть точными (=x.y.z)", name)
+		}
+		if !strings.Contains(k.lock, "\nname = \""+name+"\"\n") || !strings.Contains(k.lock, "checksum = ") {
+			t.Errorf("%s: в Cargo.lock нет крейта или контрольных сумм", name)
+		}
+		if strings.Contains(k.lock, "git+") || strings.Contains(k.toml, "git =") || strings.Contains(k.toml, "path =") {
+			t.Errorf("%s: крейты только из crates.io", name)
+		}
+		if strings.Contains(k.toml+k.lock+k.warm, "\r") {
+			t.Errorf("%s: концы строк не приведены к \\n", name)
+		}
+	}
+	if _, ok := rustKits["macroquad"]; !ok {
+		t.Fatal("набор macroquad не встроен")
+	}
+}
+
+func TestCleanCargoMessages(t *testing.T) {
+	dir := filepath.Join("C:", "Users", "x", "CodeWithMe", "envs", "rust", "macroquad")
+	in := "error[E0308]: mismatched types\n --> " + filepath.Join("src", "main.rs") + ":4:18\n  |\n\n" +
+		"error: could not compile `game` (bin \"game\") due to 1 previous error\n" + dir + string(filepath.Separator) + "Cargo.toml\n"
+	got := cleanCargo(in, dir)
+	if strings.Contains(got, "could not compile") || strings.Contains(got, "src") || strings.Contains(got, "CodeWithMe") {
+		t.Fatalf("not cleaned: %q", got)
+	}
+	if !strings.Contains(got, "--> main.rs:4:18") {
+		t.Fatalf("lost location: %q", got)
+	}
+}
+
+func TestCargoEnvInsideFolder(t *testing.T) {
+	ws := &Workspace{Root: t.TempDir()}
+	env := map[string]string{}
+	for _, kv := range ws.cargoEnv(ws.kitDir("macroquad")) {
+		k, v, _ := strings.Cut(kv, "=")
+		env[strings.ToUpper(k)] = v
+	}
+	for _, k := range []string{"CARGO_HOME", "CARGO_TARGET_DIR", "RUSTC"} {
+		if !strings.HasPrefix(env[k], ws.Root) {
+			t.Errorf("%s=%q is outside the folder", k, env[k])
+		}
+	}
+	if env["RUSTFLAGS"] != "" || env["RUSTC_WRAPPER"] != "" {
+		t.Error("чужие настройки сборки не сброшены")
+	}
+}
+
 func TestEnvRedirectsCaches(t *testing.T) {
 	ws := &Workspace{Root: t.TempDir()}
 	env := map[string]string{}
@@ -168,4 +245,3 @@ func TestEnvRedirectsCaches(t *testing.T) {
 		}
 	}
 }
-

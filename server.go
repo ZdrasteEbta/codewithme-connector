@@ -70,6 +70,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"modules":   map[string]bool{},
 			"node":      st.Node,
 			"rust":      st.Rust,
+			"rustKits":  s.ws.readyKits(st.Rust),
 			"packages":  sortedPackages(st.Packages),
 			"npm":       sortedPackages(st.Npm),
 		})
@@ -102,14 +103,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Language string   `json:"language"`
 			Pip      []string `json:"pip"`
 			Npm      []string `json:"npm"`
+			Crates   []string `json:"crates"`
 		}
-		if !readJSON(r, &req) || !validLanguage(req.Language) || !validPackages(req.Pip) || !validNpmPackages(req.Npm) {
+		if !readJSON(r, &req) || !validLanguage(req.Language) || !validPackages(req.Pip) || !validNpmPackages(req.Npm) ||
+			!validCrates(req.Language, req.Crates) {
 			reply(400, map[string]any{"error": "bad-request"})
 			return
 		}
 		pkgs := req.Pip
-		if req.Language == "node" {
+		switch req.Language {
+		case "node":
 			pkgs = req.Npm
+		case "rust":
+			pkgs = req.Crates
 		}
 		reply(200, s.inst.Ensure(req.Language, pkgs))
 
@@ -121,7 +127,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if req.Language == "" {
 			req.Language = "python"
 		}
-		if !ok || !validLanguage(req.Language) {
+		if !ok || !validLanguage(req.Language) || !validCrates(req.Language, req.Crates) {
 			reply(400, map[string]any{"error": "bad-request"})
 			return
 		}

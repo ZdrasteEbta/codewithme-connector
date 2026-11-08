@@ -5,7 +5,7 @@
 Небольшая программа с открытым кодом, которая связывает сайт [codewithme.app](https://codewithme.app) с папкой на вашем компьютере.
 
 - **Всё в одной папке.** При первом запуске вы выбираете папку (по умолчанию `CodeWithMe` в домашней папке). Туда и только туда коннектор ставит Python, Node.js, Rust, библиотеки и складывает ваш код.
-- **Ставится только то, что вы учите.** Пока вы просто читаете уроки, ничего не скачивается. Python скачивается, когда вы впервые запускаете код на Python, библиотека numpy — когда впервые запускаете задачу курса numpy, Node.js — когда впервые запускаете JavaScript, Rust (около 800 МБ на диске) — когда впервые запускаете задачу курса Rust.
+- **Ставится только то, что вы учите.** Пока вы просто читаете уроки, ничего не скачивается. Python скачивается, когда вы впервые запускаете код на Python, библиотека numpy — когда впервые запускаете задачу курса numpy, Node.js — когда впервые запускаете JavaScript, Rust (около 800 МБ на диске) — когда впервые запускаете задачу курса Rust, а cargo и игровой движок macroquad — когда впервые открываете курс игр на Rust.
 - **Код — обычными файлами.** Каждая задача — своя папка с решением, условием, примерами тестов и историей отправок. Открывайте папку в VS Code, PyCharm или любом редакторе: правка файла сразу появляется на сайте, правка на сайте — в файле.
 - **Задачи выполняются на вашем компьютере.** Быстрее, чем в браузере, и работают библиотеки, которым нужны окна или интернет (pygame, Tkinter, requests). Проверка ответов и прогресс — как обычно, на сайте.
 - **Удалить всё = удалить папку.** Коннектор не меняет PATH, реестр и системные настройки и не ставит ничего вне папки.
@@ -30,7 +30,8 @@ CodeWithMe/
                       tests/01.in, tests/01.out (примеры), submissions/ (история отправок)
   runtimes/python/    Python 3.12 (скачивается через uv при первом запуске Python)
   runtimes/node/      Node.js 22 (при первом запуске JavaScript)
-  runtimes/rust/      компилятор Rust (при первом запуске Rust)
+  runtimes/rust/      компилятор Rust (при первом запуске Rust) и cargo (для игр)
+  envs/rust/          собранные крейты для игр на Rust (macroquad)
   envs/python/        библиотеки Python, которые вы учите
   tools/uv/           uv — установщик Python от Astral
   cache/              скачанные архивы, кэши библиотек, временные файлы
@@ -48,8 +49,8 @@ CodeWithMe/
 - Коннектор слушает только `127.0.0.1` (порты 47615–47619) — с других компьютеров к нему не подключиться.
 - Запросы принимаются только со страниц `https://codewithme.app` и только по адресу 127.0.0.1/localhost (защита от DNS rebinding).
 - Выполнять код, ставить библиотеки и работать с файлами можно только после сопряжения: коннектор показывает код из 6 цифр, вы вводите его на сайте. После 5 неверных кодов сопряжение блокируется до перезапуска.
-- Сайт может передать только программу, входные данные и имена библиотек из PyPI. Файлы пишутся только внутри `courses/` выбранной папки.
-- Python, uv, Node.js и Rust скачиваются только с официальных адресов (github.com/astral-sh/uv, python-build-standalone через uv, nodejs.org, static.rust-lang.org), контрольные суммы SHA-256 проверяются.
+- Сайт может передать только программу, входные данные, имена библиотек из PyPI и npm и название набора крейтов Rust из списка, встроенного в коннектор (сейчас один — `macroquad`). Версии крейтов набора зафиксированы в коннекторе (`kits/`, Cargo.lock с контрольными суммами), сборка идёт с `--locked`: сайт не может заставить коннектор скачать другие крейты. Файлы пишутся только внутри `courses/` выбранной папки.
+- Python, uv, Node.js и Rust (с cargo) скачиваются только с официальных адресов (github.com/astral-sh/uv, python-build-standalone через uv, nodejs.org, static.rust-lang.org), контрольные суммы SHA-256 проверяются. Крейты для игр — только с crates.io, их контрольные суммы проверяет cargo.
 - Коннектор — не песочница: программа ученика работает с вашими правами, как если бы вы запустили её сами. Держите коннектор включённым, только пока занимаетесь.
 
 Нашли уязвимость — напишите по адресу из [SECURITY.md](SECURITY.md).
@@ -76,13 +77,13 @@ go build -o cwm-connector .
 A small open-source program that links [codewithme.app](https://codewithme.app) to a folder on your computer.
 
 - **Everything in one folder.** On first start you pick a folder (default: `CodeWithMe` in your home directory). Python, Node.js, Rust, libraries and your code go there and nowhere else.
-- **Only what you learn gets installed.** Nothing is downloaded while you just read lessons. Python is fetched the first time you run Python code, numpy the first time you run a numpy task, Node.js the first time you run JavaScript, Rust (about 800 MB on disk) the first time you run a Rust task.
+- **Only what you learn gets installed.** Nothing is downloaded while you just read lessons. Python is fetched the first time you run Python code, numpy the first time you run a numpy task, Node.js the first time you run JavaScript, Rust (about 800 MB on disk) the first time you run a Rust task, cargo and the macroquad game engine the first time you open the Rust games course.
 - **Your code as plain files.** Each task gets a folder with your solution, the statement, sample tests and submission history. Open it in VS Code or any editor: file edits show up on the site and vice versa.
 - **Tasks run on your computer.** Checking answers and progress stay on the site.
 - **Delete the folder to remove everything.** The connector never touches PATH, the registry or system settings.
 
 Usage: download the file for your OS from [Releases](https://github.com/ZdrasteEbta/codewithme-connector/releases/latest), run it, press Enter to accept the default folder, then enter the 6-digit code it shows on a codewithme.app task page.
 
-Security: listens on `127.0.0.1` only, accepts requests only from `https://codewithme.app` pages, requires pairing with a one-time 6-digit code, downloads runtimes only from official sources with SHA-256 verification. It is not a sandbox: your programs run with your permissions.
+Security: listens on `127.0.0.1` only, accepts requests only from `https://codewithme.app` pages, requires pairing with a one-time 6-digit code, downloads runtimes only from official sources with SHA-256 verification. Rust crates come only from a built-in, version-pinned kit list (macroquad) and are built with `--locked`. It is not a sandbox: your programs run with your permissions.
 
 Build: `go build -o cwm-connector .` (Go 1.22+, no dependencies). License: MIT.

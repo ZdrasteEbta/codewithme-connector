@@ -124,14 +124,7 @@ func (in *Installer) installRust() (string, error) {
 	}
 	dir := in.ws.Path("runtimes", "rust")
 	_ = os.RemoveAll(dir)
-	// В архиве: rustc-1.x.y-<target>/<компонент>/{bin,lib,…} — убираем две верхние папки
-	strip := func(name string) (string, bool) {
-		parts := strings.SplitN(filepath.ToSlash(name), "/", 3)
-		if len(parts) < 3 || parts[2] == "" {
-			return "", false
-		}
-		return parts[2], true
-	}
+	strip := rustStrip
 	for i, u := range urls {
 		in.setStep(fmt.Sprintf("Скачиваю Rust %s (%d из %d)", version, i+1, len(urls)))
 		archive, err := download(in.ws, u, sums[i])
@@ -145,6 +138,15 @@ func (in *Installer) installRust() (string, error) {
 		}
 	}
 	return version, nil
+}
+
+// rustStrip: в архиве rustc-1.x.y-<target>/<компонент>/{bin,lib,…} — убираем две верхние папки
+func rustStrip(name string) (string, bool) {
+	parts := strings.SplitN(filepath.ToSlash(name), "/", 3)
+	if len(parts) < 3 || parts[2] == "" {
+		return "", false
+	}
+	return parts[2], true
 }
 
 // rustBuilds — компиляции, которые идут прямо сейчас: одинаковый код компилируется один раз
@@ -243,6 +245,7 @@ func pruneRustCache(dir string, keep int) {
 }
 
 // runRust компилирует и запускает программу на Rust с вводом stdin.
+// С набором крейтов (crates: ["macroquad"]) программа собирается cargo; window — игра открывает окно.
 // Время компиляции в лимит не входит; паника или ненулевой код выхода — ошибка выполнения
 func (ws *Workspace) runRust(req RunRequest, runs *Runs) RunResult {
 	if _, err := os.Stat(ws.RustcExe()); err != nil {
@@ -251,7 +254,16 @@ func (ws *Workspace) runRust(req RunRequest, runs *Runs) RunResult {
 	if err := os.MkdirAll(ws.Path("cache", "tmp"), 0o755); err != nil {
 		return RunResult{Status: "env-error", Error: err.Error()}
 	}
-	exe, compileErr, err := ws.buildRust(req.Code)
+	var exe, compileErr string
+	var err error
+	if len(req.Crates) > 0 {
+		if !ws.kitReady(req.Crates[0], ws.LoadState().Rust) {
+			return RunResult{Status: "env-error", Error: "not-installed"}
+		}
+		exe, compileErr, err = ws.buildGame(req.Crates[0], req.Code)
+	} else {
+		exe, compileErr, err = ws.buildRust(req.Code)
+	}
 	if err != nil {
 		return RunResult{Status: "env-error", Error: err.Error()}
 	}
@@ -270,7 +282,10 @@ func (ws *Workspace) runRust(req RunRequest, runs *Runs) RunResult {
 	cmd := exec.Command(exe)
 	cmd.Dir = tmp
 	cmd.Env = ws.Env(map[string]string{"RUST_BACKTRACE": "0"})
-	hideWindow(cmd)
+	if !req.Window {
+		// Окно игры прятать нельзя; без окна — не показываем и консоль
+		hideWindow(cmd)
+	}
 	var mu sync.Mutex
 	total, over := 0, false
 	kill := func() {

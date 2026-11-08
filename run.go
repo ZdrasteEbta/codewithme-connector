@@ -17,7 +17,7 @@ import (
 
 const (
 	maxOutput    = 16 << 20
-	maxTimeMs    = 10 * 60 * 1000 // «Запустить у себя» с окном игры — до 10 минут
+	maxTimeMs    = 10 * 60 * 1000  // «Запустить у себя» с окном игры — до 10 минут
 	startupGrace = 3 * time.Second // запуск интерпретатора и импорт библиотек не входят во время программы
 	maxParallel  = 2
 )
@@ -217,15 +217,17 @@ type RunRequest struct {
 	Window           bool    `json:"window"`
 	Images           bool    `json:"images"`
 	Label            string  `json:"label"`
+	// Rust: набор крейтов из встроенного списка (["macroquad"]) — программа собирается cargo
+	Crates []string `json:"crates"`
 }
 
 type RunResult struct {
-	Status    string `json:"status"`
-	Stdout    string `json:"stdout"`
-	Stderr    string `json:"stderr"`
-	TimeMs    int    `json:"timeMs"`
-	Error     string `json:"error,omitempty"`
-	Output    string `json:"output,omitempty"`
+	Status    string   `json:"status"`
+	Stdout    string   `json:"stdout"`
+	Stderr    string   `json:"stderr"`
+	TimeMs    int      `json:"timeMs"`
+	Error     string   `json:"error,omitempty"`
+	Output    string   `json:"output,omitempty"`
 	TestError string   `json:"testError,omitempty"`
 	Images    []string `json:"images,omitempty"`
 }

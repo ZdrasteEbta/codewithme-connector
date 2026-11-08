@@ -18,9 +18,10 @@ const readme = `Папка CodeWithMe (https://codewithme.app)
 Здесь лежит всё, что коннектор CodeWithMe поставил и создал на этом компьютере:
 
   courses/    ваш код, условия задач, примеры тестов и история отправок
-  runtimes/   Python, Node.js и Rust — ставятся при первом запуске кода на этом языке
-  envs/       библиотеки Python (numpy, pygame и т. д.) и пакеты npm (express),
-              которые вы учите
+  runtimes/   Python, Node.js и Rust (с cargo для игр) — ставятся при первом запуске
+              кода на этом языке
+  envs/       библиотеки Python (numpy, pygame и т. д.), пакеты npm (express) и
+              собранные крейты для игр на Rust (macroquad), которые вы учите
   tools/      uv — программа, которая ставит Python и библиотеки
   cache/      скачанные файлы и временные файлы программ
   .cwm/       настройки коннектора
@@ -65,25 +66,25 @@ func (w *Workspace) Env(extra map[string]string) []string {
 	cache := w.Path("cache")
 	tmp := w.Path("cache", "tmp")
 	vars := map[string]string{
-		"UV_CACHE_DIR":                filepath.Join(cache, "uv"),
-		"UV_PYTHON_INSTALL_DIR":       w.Path("runtimes", "python"),
-		"UV_PYTHON_BIN_DIR":           w.Path("tools", "bin"),
-		"UV_TOOL_DIR":                 w.Path("tools", "uv-tools"),
-		"UV_PYTHON_PREFERENCE":        "only-managed",
-		"UV_PYTHON_INSTALL_REGISTRY":  "0",
-		"UV_NO_CONFIG":                "1",
-		"UV_NO_MODIFY_PATH":           "1",
-		"PIP_CACHE_DIR":               filepath.Join(cache, "pip"),
-		"npm_config_cache":            filepath.Join(cache, "npm"),
-		"MPLCONFIGDIR":                filepath.Join(cache, "matplotlib"),
-		"HF_HOME":                     filepath.Join(cache, "huggingface"),
-		"TORCH_HOME":                  filepath.Join(cache, "torch"),
-		"XDG_CACHE_HOME":              cache,
-		"TEMP":                        tmp,
-		"TMP":                         tmp,
-		"TMPDIR":                      tmp,
-		"PYTHONIOENCODING":            "utf-8",
-		"PYGAME_HIDE_SUPPORT_PROMPT":  "1",
+		"UV_CACHE_DIR":               filepath.Join(cache, "uv"),
+		"UV_PYTHON_INSTALL_DIR":      w.Path("runtimes", "python"),
+		"UV_PYTHON_BIN_DIR":          w.Path("tools", "bin"),
+		"UV_TOOL_DIR":                w.Path("tools", "uv-tools"),
+		"UV_PYTHON_PREFERENCE":       "only-managed",
+		"UV_PYTHON_INSTALL_REGISTRY": "0",
+		"UV_NO_CONFIG":               "1",
+		"UV_NO_MODIFY_PATH":          "1",
+		"PIP_CACHE_DIR":              filepath.Join(cache, "pip"),
+		"npm_config_cache":           filepath.Join(cache, "npm"),
+		"MPLCONFIGDIR":               filepath.Join(cache, "matplotlib"),
+		"HF_HOME":                    filepath.Join(cache, "huggingface"),
+		"TORCH_HOME":                 filepath.Join(cache, "torch"),
+		"XDG_CACHE_HOME":             cache,
+		"TEMP":                       tmp,
+		"TMP":                        tmp,
+		"TMPDIR":                     tmp,
+		"PYTHONIOENCODING":           "utf-8",
+		"PYGAME_HIDE_SUPPORT_PROMPT": "1",
 	}
 	for k, v := range extra {
 		vars[k] = v
@@ -113,10 +114,10 @@ func (w *Workspace) Env(extra map[string]string) []string {
 
 // state.json — что уже поставлено (чтобы не спрашивать uv при каждом запуске)
 type State struct {
-	Python   bool            `json:"python"`
-	Node     string          `json:"node,omitempty"`
+	Python bool   `json:"python"`
+	Node   string `json:"node,omitempty"`
 	// Версия Rust в runtimes/rust
-	Rust string `json:"rust,omitempty"`
+	Rust     string          `json:"rust,omitempty"`
 	Packages map[string]bool `json:"packages"`
 	// Пакеты npm в envs/node (express)
 	Npm map[string]bool `json:"npm,omitempty"`

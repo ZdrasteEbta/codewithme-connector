@@ -74,6 +74,12 @@ func (in *Installer) missing(lang string, pkgs []string) (needRuntime bool, need
 		needRuntime = s.Node == ""
 	case "rust":
 		needRuntime = s.Rust == ""
+		// Наборы крейтов для игр: cargo и собранные заранее крейты
+		for _, p := range pkgs {
+			if !in.ws.kitReady(p, s.Rust) {
+				needPkgs = append(needPkgs, p)
+			}
+		}
 	case "node":
 		needRuntime = s.Node == ""
 		for _, p := range pkgs {
@@ -213,6 +219,21 @@ func (in *Installer) install(lang string, needRuntime bool, pkgs []string) error
 				return err
 			}
 			logf("Rust %s готов.", version)
+		}
+		if len(pkgs) > 0 {
+			rv := ws.LoadState().Rust
+			if _, err := os.Stat(ws.CargoExe()); err != nil {
+				if err := in.installCargo(rv); err != nil {
+					return fmt.Errorf("не удалось поставить cargo: %w", err)
+				}
+				logf("cargo %s готов.", rv)
+			}
+			for _, kit := range pkgs {
+				if err := in.warmKit(kit, rv); err != nil {
+					return err
+				}
+				logf("Набор %s готов.", kit)
+			}
 		}
 	default:
 		return fmt.Errorf("неизвестный язык %q", lang)
