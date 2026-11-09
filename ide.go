@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -293,6 +294,40 @@ func (s *Server) serveApp(w http.ResponseWriter, r *http.Request) {
 		data, _ := json.Marshal(req)
 		s.ide.Enqueue(data)
 		reply(200, map[string]any{"ok": true})
+
+	case r.Method == http.MethodGet && r.URL.Path == "/app/env":
+		st := s.ws.LoadState()
+		reply(200, map[string]any{
+			"python":      st.Python,
+			"pythonExe":   s.ws.PythonExe(),
+			"node":        st.Node != "",
+			"nodeExe":     s.ws.NodeExe(),
+			"nodeModules": filepath.Join(s.ws.NodePackagesDir(), "node_modules"),
+			"rust":        st.Rust != "",
+			"rustcExe":    s.ws.RustcExe(),
+			"tmp":         s.ws.Path("cache", "tmp"),
+		})
+
+	case r.Method == http.MethodPost && r.URL.Path == "/app/install":
+		var req struct {
+			Language string   `json:"language"`
+			Pip      []string `json:"pip"`
+			Npm      []string `json:"npm"`
+			Fresh    bool     `json:"fresh"` // первое нажатие кнопки: окно видит, что на диске пакетов нет
+		}
+		if !readJSON(r, &req) || (req.Language != "python" && req.Language != "node") ||
+			!validPackages(req.Pip) || !validNpmPackages(req.Npm) {
+			reply(400, map[string]any{"error": "bad-request"})
+			return
+		}
+		pkgs := req.Pip
+		if req.Language == "node" {
+			pkgs = req.Npm
+		}
+		if req.Fresh {
+			s.inst.Forget(req.Language, pkgs)
+		}
+		reply(200, s.inst.Ensure(req.Language, pkgs))
 
 	case r.Method == http.MethodPost && r.URL.Path == "/app/open-site":
 		openBrowser(s.siteBase)

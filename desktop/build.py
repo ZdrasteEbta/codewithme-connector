@@ -17,7 +17,7 @@ unused = [
     "PyQt6.QtPdfWidgets", "PyQt6.QtPositioning", "PyQt6.QtQml", "PyQt6.QtQuick", "PyQt6.QtQuick3D",
     "PyQt6.QtQuickWidgets", "PyQt6.QtRemoteObjects", "PyQt6.QtSensors", "PyQt6.QtSerialPort", "PyQt6.QtSql",
     "PyQt6.QtSvgWidgets", "PyQt6.QtTest", "PyQt6.QtWebChannel", "PyQt6.QtWebSockets", "PyQt6.QtXml",
-    "tkinter", "unittest", "pydoc", "PIL",
+    "tkinter", "PIL",  # unittest нужен pyflakes, pydoc нужен jedi
 ]
 args = [
     str(here / "main.py"),
@@ -32,6 +32,11 @@ args = [
     "--add-binary", f"{helper}{sep}.",
     "--add-data", f"{here / 'icon.png'}{sep}.",
     "--add-data", f"{here / 'fonts'}{sep}fonts",
+    # jedi запускает в окружении ученика свой файл, а подсказки берёт из .pyi: нужны исходники и данные
+    "--collect-all", "jedi",
+    "--collect-all", "parso",
+    "--hidden-import", "pyflakes.checker",
+    "--copy-metadata", "pyflakes",  # в метаданных лежит текст лицензии
 ]
 for name in unused:
     args += ["--exclude-module", name]

@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
+from assist import Assistant
 from backend import Api, StatePoller
 from editor import CodeEditor
 from icons import icon, mascot
@@ -281,7 +282,9 @@ class MainWindow(QMainWindow):
         self.editor.edited.connect(self.on_edited)
         self.editor.position_changed.connect(self.show_position)
         self.find_bar = FindBar(self.editor, self)
+        self.assist = Assistant(self.api, self.editor, self)
         tv.addWidget(self.editor_stack, 1)
+        tv.addWidget(self.assist.bar)
         tv.addWidget(self.find_bar)
         self.vsplit.addWidget(top)
 
@@ -496,6 +499,7 @@ class MainWindow(QMainWindow):
         self.code_ttl.setText(t["code_ttl"])
         self.keys_label.setText(t["f1_hint"])
         self.find_bar.retitle(t)
+        self.assist.retitle(t, self.locale)
         self.status_sig = None
         self.update_labels()
         self.show_position(*self.editor.getCursorPosition())
@@ -649,6 +653,7 @@ class MainWindow(QMainWindow):
         self.dirty = False
         self.file_ready = True
         self.editor_stack.setCurrentWidget(self.editor)
+        self.assist.task_changed(self.task.get("language", "python"), self.task_folder, self.state.get("folder"))
         if fresh:
             self.editor.setFocus()
 
@@ -863,6 +868,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.save_timer.stop()
         self.flush()
+        self.assist.close()
         s = self.settings
         s.setValue("geometry", self.saveGeometry())
         s.setValue("split", self.split.saveState())

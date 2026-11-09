@@ -126,6 +126,27 @@ func (in *Installer) Ensure(lang string, pkgs []string) InstallStatus {
 	return InstallStatus{State: "installing", Step: in.step}
 }
 
+// Forget снимает отметку «установлено» с пакетов, которых на самом деле нет на диске.
+// Иначе Ensure считал бы их готовыми и ничего не ставил.
+func (in *Installer) Forget(lang string, pkgs []string) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if in.running {
+		return
+	}
+	s := in.ws.LoadState()
+	for _, p := range pkgs {
+		if lang == "node" {
+			delete(s.Npm, npmName(p))
+		} else {
+			delete(s.Packages, normPkg(p))
+		}
+	}
+	if err := in.ws.SaveState(s); err != nil {
+		logf("Не удалось обновить состояние: %v", err)
+	}
+}
+
 func (in *Installer) setStep(step string) {
 	in.mu.Lock()
 	in.step = step

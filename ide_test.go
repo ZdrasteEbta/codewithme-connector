@@ -82,6 +82,36 @@ func TestSiteEndpointsNeedToken(t *testing.T) {
 	}
 }
 
+func TestAppInstall(t *testing.T) {
+	s, _ := ideTestServer(t)
+	self := map[string]string{"Origin": "http://127.0.0.1:" + itoa(ideTestPort)}
+	body := `{"language":"python","pip":["numpy"]}`
+	if w := ideRequest(s, http.MethodPost, "/app/install", body, map[string]string{"Origin": site}); w.Code != 403 {
+		t.Fatalf("сайт не должен ставить библиотеки через окно: %d", w.Code)
+	}
+	for _, bad := range []string{
+		`{"language":"python","pip":["--index-url=http://x"]}`,
+		`{"language":"node","npm":["../evil"]}`,
+		`{"language":"rust"}`,
+	} {
+		if w := ideRequest(s, http.MethodPost, "/app/install", bad, self); w.Code != 400 {
+			t.Fatalf("%s принят: %d", bad, w.Code)
+		}
+	}
+	w := ideRequest(s, http.MethodGet, "/app/env", "", nil)
+	var env struct {
+		Python    bool
+		PythonExe string
+		Tmp       string
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &env); err != nil {
+		t.Fatal(err)
+	}
+	if env.Python || env.PythonExe == "" || env.Tmp == "" {
+		t.Fatalf("окружение: %s", w.Body.String())
+	}
+}
+
 func TestCommandReachesSite(t *testing.T) {
 	s, token := ideTestServer(t)
 	self := map[string]string{"Origin": "http://127.0.0.1:" + itoa(ideTestPort)}

@@ -156,6 +156,12 @@ QPushButton#cell[state="doneactive"] {{ background: {c['done']}; border: 2px sol
 #fileName {{ color: {c['mute']}; font-size: 12px; font-family: "{code}"; }}
 #savedState {{ color: {c['mute']}; font-size: 12px; }}
 #findBar {{ background: {c['panel']}; border-top: 1px solid {c['line']}; }}
+#problemRow {{ background: {c['code']}; border-top: 1px solid {c['line']}; }}
+#problemRow[bad="true"] {{ background: {c['rosebg']}; border-top: 1px solid {c['roseline']}; }}
+#problemText {{ color: {c['mute']}; font-size: 12px; background: transparent; }}
+#problemRow[bad="true"] #problemText {{ color: {c['fg']}; }}
+#depsRow {{ background: {c['limebg']}; border-top: 1px solid {c['limeline']}; }}
+#depsText {{ color: {c['fg']}; font-size: 12px; background: transparent; }}
 #outputBar {{ background: {c['card']}; border-top: 1px solid {c['line2']}; border-bottom: 1px solid {c['line']}; }}
 #busyBar, #runTime {{ color: {c['mute']}; font-size: 12px; }}
 #runTime {{ font-family: "{code}"; }}

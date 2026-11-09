@@ -34,6 +34,9 @@ RU = {
     "running": "Запускаю…", "checking": "Проверяю…", "installing": "Устанавливаю…",
     "accepted": "Всё верно!", "next_link": "Следующая задача →", "tests": "Тесты: {passed} из {total}",
     "error_line": "строка {n}", "expected": "Ожидалось", "got": "Получено", "input": "Ввод",
+    "no_problems": "Ошибок в написании нет", "problem_line": "Строка {n}", "should_be": "Должно быть:", "more_problems": "ещё {n}",
+    "deps_install": "Установить все зависимости", "deps_missing": "Не хватает библиотек: {names}",
+    "deps_failed": "Не получилось установить. Проверь интернет и нажми ещё раз.",
 }
 
 EN = {
@@ -69,6 +72,9 @@ EN = {
     "running": "Running…", "checking": "Checking…", "installing": "Installing…",
     "accepted": "All correct!", "next_link": "Next task →", "tests": "Tests: {passed} of {total}",
     "error_line": "line {n}", "expected": "Expected", "got": "Got", "input": "Input",
+    "no_problems": "No spelling errors in the code", "problem_line": "Line {n}", "should_be": "It should be:", "more_problems": "{n} more",
+    "deps_install": "Install all dependencies", "deps_missing": "Missing libraries: {names}",
+    "deps_failed": "Installation failed. Check your internet connection and press again.",
 }
 
 TG = {
@@ -104,6 +110,9 @@ TG = {
     "running": "Иҷро мешавад…", "checking": "Санҷида мешавад…", "installing": "Насб мешавад…",
     "accepted": "Ҳамааш дуруст!", "next_link": "Масъалаи навбатӣ →", "tests": "Тестҳо: {passed} аз {total}",
     "error_line": "сатри {n}", "expected": "Интизор буд", "got": "Гирифта шуд", "input": "Вуруд",
+    "no_problems": "Дар навишти код хато нест", "problem_line": "Сатри {n}", "should_be": "Бояд чунин бошад:", "more_problems": "боз {n}",
+    "deps_install": "Насби ҳамаи вобастагиҳо", "deps_missing": "Китобхонаҳо намерасанд: {names}",
+    "deps_failed": "Насб нашуд. Интернетро санҷ ва боз пахш кун.",
 }
 
 TEXTS = {"ru": RU, "en": EN, "tg": TG}

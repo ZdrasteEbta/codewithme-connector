@@ -1,11 +1,13 @@
 """Редактор кода: подсветка, автодополнение, мультикурсор и команды со строками."""
 import builtins
+import html
 import keyword
 import re
 
 from PyQt6.Qsci import QsciAPIs, QsciLexerCPP, QsciLexerHTML, QsciLexerJavaScript, QsciLexerPython, QsciScintilla
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtWidgets import QToolTip
 
 from theme import code_family
 
@@ -38,6 +40,23 @@ SCI_TARGETWHOLEDOCUMENT = 2690
 SCI_SETKEYWORDS = 4005
 SCI_SETEXTRAASCENT = 2525
 SCI_SETEXTRADESCENT = 2527
+SCI_INDICSETSTYLE = 2080
+SCI_INDICSETFORE = 2082
+SCI_STYLESETSIZE = 2055
+SCI_STYLESETFONT = 2056
+SCI_CALLTIPSHOW = 2200
+SCI_CALLTIPCANCEL = 2201
+SCI_CALLTIPACTIVE = 2202
+SCI_CALLTIPSETHLT = 2204
+SCI_CALLTIPUSESTYLE = 2212
+SCI_CALLTIPSETPOSITION = 2213
+SCI_SETMOUSEDWELLTIME = 2264
+SCI_SETINDICATORCURRENT = 2500
+SCI_INDICATORFILLRANGE = 2504
+SCI_INDICATORCLEARRANGE = 2505
+INDIC_SQUIGGLEPIXMAP = 13
+STYLE_CALLTIP = 38
+PROBLEM_INDICATOR = 8
 SCFIND_MATCHCASE = 4
 
 RUST_KEYWORDS = (
@@ -97,6 +116,8 @@ class CodeEditor(QsciScintilla):
         self.language = ""
         self.locked = False
         self.colors = None
+        self.problems = []
+        self._tip_text = b""
 
         self.setUtf8(True)
         self.setEolMode(QsciScintilla.EolMode.EolUnix)
@@ -124,6 +145,10 @@ class CodeEditor(QsciScintilla):
         self.SendScintilla(SCI_SETMULTIPLESELECTION, 1)
         self.SendScintilla(SCI_SETADDITIONALSELECTIONTYPING, 1)
         self.SendScintilla(SCI_SETMULTIPASTE, 1)
+        self.setCallTipsStyle(QsciScintilla.CallTipsStyle.CallTipsNone)  # подсказки показывает assist.py
+        self.SendScintilla(SCI_SETMOUSEDWELLTIME, 350)
+        self.SCN_DWELLSTART.connect(self._dwell)
+        self.SCN_DWELLEND.connect(lambda *_: QToolTip.hideText())
 
         self.SendScintilla(SCI_SETEXTRAASCENT, 2)
         self.SendScintilla(SCI_SETEXTRADESCENT, 2)
@@ -184,6 +209,15 @@ class CodeEditor(QsciScintilla):
         self.setUnmatchedBraceBackgroundColor(q(c["code"]))
         self.setIndentationGuidesForegroundColor(q(c["line"]))
         self.setIndentationGuidesBackgroundColor(q(c["code"]))
+        self.SendScintilla(SCI_INDICSETSTYLE, PROBLEM_INDICATOR, INDIC_SQUIGGLEPIXMAP)
+        self.SendScintilla(SCI_INDICSETFORE, PROBLEM_INDICATOR, self._bgr(c["rose"]))
+        self.SendScintilla(SCI_STYLESETFONT, STYLE_CALLTIP, code_family().encode())
+        self.SendScintilla(SCI_STYLESETSIZE, STYLE_CALLTIP, 10)
+        self.SendScintilla(SCI_CALLTIPUSESTYLE, 0)
+        self.SendScintilla(SCI_CALLTIPSETPOSITION, 1)  # над строкой: снизу открывается список слов
+        self.setCallTipsBackgroundColor(q(c["panel2"]))
+        self.setCallTipsForegroundColor(q(c["fg"]))
+        self.setCallTipsHighlightColor(q(c["keyword"]))
         self._fit_margin()
 
     @staticmethod
@@ -274,6 +308,56 @@ class CodeEditor(QsciScintilla):
     def _cursor_moved(self, line: int, col: int) -> None:
         self.position_changed.emit(line, col)
         self._apply_lock()
+
+    # --- красная линия и подсказка параметров ---
+
+    def set_problems(self, problems: list) -> None:
+        self.problems = []
+        self.SendScintilla(SCI_SETINDICATORCURRENT, PROBLEM_INDICATOR)
+        self.SendScintilla(SCI_INDICATORCLEARRANGE, 0, self.length())
+        for p in problems:
+            line = min(p.line, self.lines() - 1)
+            size = len(self.text(line).rstrip("\r\n"))
+            col, end = p.col, p.end
+            if col >= size:  # ошибка в конце строки: линия под последним символом
+                col, end = max(size - 1, 0), size
+            end = min(max(end, col + 1), size)
+            self.problems.append((line, col, max(end, col + 1), p))
+            if size:
+                start = self.positionFromLineIndex(line, col)
+                self.SendScintilla(SCI_INDICATORFILLRANGE, start, self.positionFromLineIndex(line, end) - start)
+
+    def go_to_problem(self, problem) -> None:
+        self.setCursorPosition(min(problem.line, self.lines() - 1), problem.col)
+        self.ensureLineVisible(problem.line)
+        self.setFocus()
+
+    def _dwell(self, position: int, x: int, y: int) -> None:
+        if position < 0:
+            return
+        line, index = self.lineIndexFromPosition(position)
+        found = next((p for n, col, end, p in self.problems if n == line and col <= index < end), None)
+        if not found:
+            return
+        tip = html.escape(found.message)
+        if found.example:
+            tip += f'<br><span style="font-family:\'{code_family()}\';">{html.escape(found.example)}</span>'
+        QToolTip.showText(self.viewport().mapToGlobal(QPoint(x, y + 18)), tip, self.viewport())
+
+    def show_call_tip(self, offset: int, text: str, start: int, stop: int) -> None:
+        before = self.text()[:offset]
+        line = before.count("\n")
+        position = self.positionFromLineIndex(line, offset - (before.rfind("\n") + 1))
+        data = text.encode("utf-8")
+        if bytes(data) != self._tip_text or not self.SendScintilla(SCI_CALLTIPACTIVE):
+            self._tip_text = bytes(data)
+            self.SendScintilla(SCI_CALLTIPSHOW, position, data)
+        self.SendScintilla(SCI_CALLTIPSETHLT, max(start, 0), max(stop, 0))
+
+    def hide_call_tip(self) -> None:
+        self._tip_text = b""
+        if self.SendScintilla(SCI_CALLTIPACTIVE):
+            self.SendScintilla(SCI_CALLTIPCANCEL)
 
     def get_zoom(self) -> int:
         return int(self.SendScintilla(SCI_GETZOOM))
