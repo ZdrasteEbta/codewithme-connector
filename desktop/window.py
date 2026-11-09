@@ -1,66 +1,24 @@
 """Главное окно: сетка задач, редактор и результат."""
-import base64
-import html
 import json
-import re
+import os
 import sys
 
-from PyQt6.QtCore import QByteArray, QEvent, QSettings, Qt, QTimer, QUrl
-from PyQt6.QtGui import QAction, QDesktopServices, QImage, QKeySequence, QShortcut, QTextDocument
+from PyQt6.QtCore import QSettings, Qt, QTimer, QUrl
+from PyQt6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication, QCheckBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
-    QMainWindow, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSplitter, QStackedWidget,
-    QTableWidget, QTableWidgetItem, QTextBrowser, QVBoxLayout, QWidget,
+    QApplication, QButtonGroup, QDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
+    QMainWindow, QMessageBox, QPlainTextEdit, QSizePolicy, QSplitter, QStackedWidget,
+    QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 from backend import Api, StatePoller
 from editor import CodeEditor
+from icons import icon, mascot
+from panels import KeyButton, ResultPanel, Sidebar, button
 from texts import TEXTS, system_locale
-from theme import code_family, palette, stylesheet
+from theme import palette, stylesheet
 
-CELL_SIZE = 26
-CELL_GAP = 4
-MAX_OUTPUT = 40000
-PY_ERROR = re.compile(r'(File "([^"\n]*)", )(line (\d+))')
-FILE_ERROR = re.compile(r'([\w./\\:-]*\.(?:rs|js|mjs)):(\d+)')
-FOREIGN = ("site-packages", "lib\\python", "lib/python", "/rustc/", "node_modules", "node:", "<frozen")
-
-
-def button(text="", kind=None, checkable=False):
-    b = QPushButton(text)
-    if kind:
-        b.setProperty("kind", kind)
-    b.setCheckable(checkable)
-    b.setCursor(Qt.CursorShape.PointingHandCursor)
-    return b
-
-
-def link_errors(text: str) -> str:
-    """Экранирует вывод и превращает номера строк в ссылки на редактор."""
-    out = html.escape(text, quote=False)
-
-    def py(m):
-        if any(x in m.group(2) for x in FOREIGN):
-            return m.group(0)
-        return f'{m.group(1)}<a href="cwm:line:{m.group(4)}">{m.group(3)}</a>'
-
-    def other(m):
-        if any(x in m.group(1) for x in FOREIGN):
-            return m.group(0)
-        return f'<a href="cwm:line:{m.group(2)}">{m.group(0)}</a>'
-
-    return FILE_ERROR.sub(other, PY_ERROR.sub(py, out))
-
-
-class ClickLabel(QLabel):
-    def __init__(self, text, on_click):
-        super().__init__(text)
-        self.on_click = on_click
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def mouseReleaseEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.on_click()
+LANGUAGE_NAMES = {"python": "Python", "javascript": "JavaScript", "node": "Node.js", "dom": "JavaScript", "html": "HTML", "rust": "Rust"}
 
 
 class FindBar(QFrame):
@@ -205,8 +163,6 @@ class MainWindow(QMainWindow):
         self.key = None
         self.status = None
         self.status_sig = None
-        self.grid_sig = None
-        self.grid_cols = 0
         self.base = "0"
         self.dirty = False
         self.file_ready = False
@@ -214,11 +170,10 @@ class MainWindow(QMainWindow):
         self.menus = {}
         self.acts = {}
         self.hotkey_rows = []
-        self.active_cell = None
 
         self.setWindowTitle("CodeWithMe IDE")
-        self.resize(1040, 700)
-        self.setMinimumSize(640, 420)
+        self.resize(1200, 780)
+        self.setMinimumSize(760, 480)
 
         self.save_timer = QTimer(self, singleShot=True, interval=250, timeout=self.flush)
         self.watch_timer = QTimer(self, interval=1000, timeout=self.watch_file)
@@ -246,18 +201,8 @@ class MainWindow(QMainWindow):
         self.pages.addWidget(self.split)
         self.pages.addWidget(self.build_connect())
 
-        self.grid_area = QScrollArea()
-        self.grid_area.setWidgetResizable(True)
-        self.grid_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.grid_host = QWidget()
-        self.grid_host.setObjectName("gridHost")
-        self.grid_layout = QVBoxLayout(self.grid_host)
-        self.grid_layout.setContentsMargins(0, 0, 0, 10)
-        self.grid_layout.setSpacing(4)
-        self.grid_area.setWidget(self.grid_host)
-        self.grid_area.setMinimumWidth(170)
-        self.grid_area.viewport().installEventFilter(self)
-        self.split.addWidget(self.grid_area)
+        self.sidebar = Sidebar(self.open_task, self.settings)
+        self.split.addWidget(self.sidebar)
 
         right = QWidget()
         rv = QVBoxLayout(right)
@@ -269,7 +214,7 @@ class MainWindow(QMainWindow):
         self.banner = QFrame()
         self.banner.setObjectName("banner")
         bh = QHBoxLayout(self.banner)
-        bh.setContentsMargins(12, 4, 8, 4)
+        bh.setContentsMargins(18, 4, 8, 4)
         self.banner_text = QLabel()
         self.banner_text.setWordWrap(True)
         self.banner_btn = button(kind="quiet")
@@ -281,20 +226,26 @@ class MainWindow(QMainWindow):
         header = QFrame()
         header.setObjectName("header")
         hh = QHBoxLayout(header)
-        hh.setContentsMargins(12, 6, 8, 6)
-        hh.setSpacing(6)
+        hh.setContentsMargins(18, 10, 14, 10)
+        hh.setSpacing(8)
+        names = QVBoxLayout()
+        names.setSpacing(1)
+        self.place = QLabel()
+        self.place.setObjectName("taskPlace")
         self.title = QLabel()
         self.title.setObjectName("taskTitle")
         self.title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.reset_btn = button(kind="quiet")
-        self.stop_btn = button(kind="danger")
-        self.run_btn = button()
-        self.submit_btn = button(kind="primary")
+        names.addWidget(self.place)
+        names.addWidget(self.title)
+        self.reset_btn = KeyButton(kind="quiet")
+        self.stop_btn = KeyButton(kind="danger")
+        self.run_btn = KeyButton(keys="Ctrl ↵")
+        self.submit_btn = KeyButton(keys="Ctrl ⇧ ↵", kind="primary")
         self.reset_btn.clicked.connect(self.reset_code)
         self.stop_btn.clicked.connect(self.stop)
         self.run_btn.clicked.connect(self.run)
         self.submit_btn.clicked.connect(self.submit)
-        hh.addWidget(self.title, 1)
+        hh.addLayout(names, 1)
         for b in (self.reset_btn, self.stop_btn, self.run_btn, self.submit_btn):
             hh.addWidget(b)
         rv.addWidget(header)
@@ -307,6 +258,17 @@ class MainWindow(QMainWindow):
         tv = QVBoxLayout(top)
         tv.setContentsMargins(0, 0, 0, 0)
         tv.setSpacing(0)
+        file_bar = QFrame()
+        file_bar.setObjectName("fileBar")
+        fb = QHBoxLayout(file_bar)
+        fb.setContentsMargins(18, 5, 18, 5)
+        self.file_label = QLabel()
+        self.file_label.setObjectName("fileName")
+        self.saved_label = QLabel()
+        self.saved_label.setObjectName("savedState")
+        fb.addWidget(self.file_label, 1)
+        fb.addWidget(self.saved_label)
+        tv.addWidget(file_bar)
         self.editor_stack = QStackedWidget()
         self.hint = QLabel()
         self.hint.setObjectName("emptyHint")
@@ -330,64 +292,118 @@ class MainWindow(QMainWindow):
         bar = QFrame()
         bar.setObjectName("outputBar")
         ob = QHBoxLayout(bar)
-        ob.setContentsMargins(12, 3, 6, 3)
-        self.output_title = QLabel()
-        self.output_title.setObjectName("muted")
+        ob.setContentsMargins(12, 5, 14, 5)
+        ob.setSpacing(2)
+        self.result_tab = button(checkable=True)
+        self.input_tab = button(checkable=True)
+        for tab in (self.result_tab, self.input_tab):
+            tab.setObjectName("tab")
+        self.tabs = QButtonGroup(self)
+        self.tabs.setExclusive(True)
+        self.tabs.addButton(self.result_tab)
+        self.tabs.addButton(self.input_tab)
+        self.result_tab.setChecked(True)
+        self.result_tab.clicked.connect(lambda: self.output_stack.setCurrentIndex(0))
+        self.input_tab.clicked.connect(lambda: self.output_stack.setCurrentIndex(1))
         self.busy = QLabel()
         self.busy.setObjectName("busyBar")
-        self.stdin_btn = button(kind="quiet", checkable=True)
-        self.stdin_btn.toggled.connect(self.toggle_stdin)
-        ob.addWidget(self.output_title)
+        self.run_time = QLabel()
+        self.run_time.setObjectName("runTime")
+        ob.addWidget(self.result_tab)
+        ob.addWidget(self.input_tab)
+        ob.addSpacing(10)
         ob.addWidget(self.busy, 1)
-        ob.addWidget(self.stdin_btn)
+        ob.addWidget(self.run_time)
         bv.addWidget(bar)
+        self.output_stack = QStackedWidget()
+        self.result_panel = ResultPanel(self.next_task, self.on_link)
+        self.result = self.result_panel.browser
         self.stdin = QPlainTextEdit()
-        self.stdin.setMaximumHeight(78)
-        self.stdin.hide()
-        bv.addWidget(self.stdin)
-        self.result = QTextBrowser()
-        self.result.setOpenLinks(False)
-        self.result.anchorClicked.connect(self.on_link)
-        bv.addWidget(self.result, 1)
+        self.output_stack.addWidget(self.result_panel)
+        self.output_stack.addWidget(self.stdin)
+        bv.addWidget(self.output_stack, 1)
         self.vsplit.addWidget(self.bottom)
         self.vsplit.setStretchFactor(0, 3)
         self.vsplit.setStretchFactor(1, 2)
-        self.vsplit.setSizes([420, 220])
-        self.split.setSizes([230, 810])
+        self.vsplit.setSizes([440, 260])
+        self.split.setSizes([280, 920])
 
         self.pos_label = QLabel()
-        self.saved_label = QLabel()
+        self.language_label = QLabel()
         self.code_label = QLabel()
-        self.site_label = QLabel()
+        self.keys_label = QLabel()
         self.statusBar().addWidget(self.pos_label)
-        self.statusBar().addWidget(self.saved_label)
+        self.statusBar().addWidget(self.language_label)
         self.statusBar().addPermanentWidget(self.code_label)
-        self.statusBar().addPermanentWidget(self.site_label)
+        self.statusBar().addPermanentWidget(self.keys_label)
         self.statusBar().setSizeGripEnabled(False)
+
+        logo = QWidget()
+        logo.setObjectName("cornerBox")
+        lb = QHBoxLayout(logo)
+        lb.setContentsMargins(10, 0, 8, 0)
+        lb.setSpacing(8)
+        self.logo_picture = QLabel()
+        wordmark = QLabel("CodeWithMe")
+        wordmark.setObjectName("wordmark")
+        lb.addWidget(self.logo_picture)
+        lb.addWidget(wordmark)
+        logo.setFixedHeight(28)
+        self.menuBar().setCornerWidget(logo, Qt.Corner.TopLeftCorner)
+        state = QWidget()
+        state.setObjectName("cornerBox")
+        sb = QHBoxLayout(state)
+        sb.setContentsMargins(0, 0, 12, 0)
+        sb.setSpacing(6)
+        self.site_dot = QLabel()
+        self.site_label = QLabel()
+        self.site_label.setObjectName("siteState")
+        sb.addWidget(self.site_dot)
+        sb.addWidget(self.site_label)
+        state.setFixedHeight(28)
+        self.menuBar().setCornerWidget(state, Qt.Corner.TopRightCorner)
 
     def build_connect(self):
         page = QWidget()
         box = QVBoxLayout(page)
         box.addStretch(1)
+        center = Qt.AlignmentFlag.AlignCenter
+        self.connect_mascot = QLabel()
+        self.connect_mascot.setAlignment(center)
         self.connect_title = QLabel()
         self.connect_title.setObjectName("connectTitle")
         self.connect_text = QLabel()
-        self.connect_text.setObjectName("muted")
+        self.connect_text.setObjectName("connectText")
         self.connect_text.setWordWrap(True)
+        card = QFrame()
+        card.setObjectName("codeCard")
+        card.setFixedWidth(460)
+        cv = QVBoxLayout(card)
+        cv.setContentsMargins(20, 20, 20, 20)
+        cv.setSpacing(4)
         self.pair_code = QLabel("—")
         self.pair_code.setObjectName("pairCode")
         self.pair_code.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.connect_btn = button(kind="primary")
+        self.code_ttl = QLabel()
+        self.code_ttl.setObjectName("muted")
+        for w in (self.pair_code, self.code_ttl):
+            w.setAlignment(center)
+            cv.addWidget(w)
+        self.connect_btn = KeyButton(kind="primary")
+        self.connect_btn.setFixedHeight(44)
         self.connect_btn.clicked.connect(self.open_site)
-        for w in (self.connect_title, self.connect_text, self.pair_code):
-            w.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            box.addWidget(w)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        row.addWidget(self.connect_btn)
-        row.addStretch(1)
-        box.addSpacing(10)
-        box.addLayout(row)
+        self.connect_text.setFixedWidth(460)
+        for w in (self.connect_mascot, self.connect_title, self.connect_text):
+            w.setAlignment(center)
+        box.addWidget(self.connect_mascot, 0, center)
+        box.addSpacing(14)
+        box.addWidget(self.connect_title, 0, center)
+        box.addSpacing(6)
+        box.addWidget(self.connect_text, 0, center)
+        box.addSpacing(16)
+        box.addWidget(card, 0, center)
+        box.addSpacing(16)
+        box.addWidget(self.connect_btn, 0, center)
         box.addStretch(1)
         return page
 
@@ -458,12 +474,6 @@ class MainWindow(QMainWindow):
             self.menus[menu].addAction(act)
             self.acts[name] = act
 
-    def eventFilter(self, obj, event):
-        if obj is self.grid_area.viewport() and event.type() == QEvent.Type.Resize:
-            if self.columns() != self.grid_cols:
-                self.rebuild_grid(force=True)
-        return super().eventFilter(obj, event)
-
     # --- язык и тема ---
 
     def retitle(self):
@@ -474,18 +484,19 @@ class MainWindow(QMainWindow):
             act.setText(t[name])
         self.reset_btn.setText(t["reset"])
         self.stop_btn.setText(t["stop"])
-        self.stdin_btn.setText(t["stdin"])
+        self.result_tab.setText(t["output"])
+        self.input_tab.setText(t["stdin"])
         self.stdin.setPlaceholderText(t["stdin_ph"])
-        self.output_title.setText(t["output"])
         self.hint.setText(t["pick"])
         self.banner_text.setText(t["site_offline"])
         self.banner_btn.setText(t["open_site"])
         self.connect_title.setText(t["connect_title"])
         self.connect_text.setText(t["connect_text"])
         self.connect_btn.setText(t["open_site"])
+        self.code_ttl.setText(t["code_ttl"])
+        self.keys_label.setText(t["f1_hint"])
         self.find_bar.retitle(t)
         self.status_sig = None
-        self.grid_sig = None
         self.update_labels()
         self.show_position(*self.editor.getCursorPosition())
         self.render_status()
@@ -496,11 +507,20 @@ class MainWindow(QMainWindow):
         c = palette(self.theme)
         QApplication.instance().setStyleSheet(stylesheet(c))
         self.editor.apply_theme(c)
+        self.paint_icons(c)
         self.status_sig = None
         self.render_status()
+        self.rebuild_grid()
         self.dark_title_bar()
         if remember:
             self.settings.setValue("theme", self.theme)
+
+    def paint_icons(self, c):
+        self.logo_picture.setPixmap(mascot(c["lime"], 20))
+        self.connect_mascot.setPixmap(mascot(c["lime"], 84))
+        self.reset_btn.set_picture(icon("reset", c["mute"], 14))
+        self.run_btn.set_picture(icon("play", c["fg"], 12))
+        self.update_labels()
 
     def dark_title_bar(self):
         if sys.platform != "win32":
@@ -535,7 +555,8 @@ class MainWindow(QMainWindow):
 
         online = bool(data.get("siteOnline"))
         self.pages.setCurrentIndex(0 if tree or online or self.task else 1)
-        self.pair_code.setText(data.get("code") or "—")
+        code = (data.get("code") or "—").replace(" ", "")
+        self.pair_code.setText(f"{code[:3]} {code[3:]}" if len(code) == 6 else code)
 
         current = data.get("current")
         if current:
@@ -549,10 +570,19 @@ class MainWindow(QMainWindow):
         self.rebuild_grid()
 
     def update_labels(self):
+        c = palette(self.theme)
         online = bool(self.state.get("siteOnline"))
         self.site_label.setText(self.t["online"] if online else self.t["offline"])
+        self.site_dot.setPixmap(icon("dot" if online else "ring", c["done"] if online else c["mute"], 10))
         code = self.state.get("code")
         self.code_label.setText(f'{self.t["code_label"]}: {code}' if code and not online else "")
+        place = ""
+        for row in (self.state.get("tree") or {}).get("rows", []):
+            for cell in row.get("cells") or []:
+                if cell.get("key") == self.key:
+                    place = self.t["topic_task"].format(topic=row.get("title", ""), letter=cell.get("label", ""))
+        self.place.setText(place)
+        self.place.setVisible(bool(place))
 
     def busy_text(self):
         return (self.status or {}).get("busy") or ""
@@ -577,11 +607,10 @@ class MainWindow(QMainWindow):
         self.acts["stop"].setEnabled(busy)
         self.acts["reset"].setEnabled(ready and not busy)
         self.acts["next"].setEnabled(bool((self.status or {}).get("next")) and online)
-        self.stdin_btn.setVisible(bool(task) and not task.get("noInput"))
-        if self.stdin_btn.isHidden() and self.stdin.isVisible():
-            self.stdin_btn.setChecked(False)
-        self.run_btn.setToolTip("Ctrl+Enter · F5")
-        self.submit_btn.setToolTip("Ctrl+Shift+Enter")
+        takes_input = bool(task) and not task.get("noInput")
+        self.input_tab.setVisible(takes_input)
+        if not takes_input and self.output_stack.currentIndex() == 1:
+            self.show_result_tab()
         self.stop_btn.setToolTip("Shift+F5")
         self.busy.setText(self.busy_text())
 
@@ -612,6 +641,8 @@ class MainWindow(QMainWindow):
             return
         self.base = data.get("version", "0")
         self.task_folder = data.get("folder")
+        self.file_label.setText(os.path.basename(data.get("file", "")))
+        self.language_label.setText(LANGUAGE_NAMES.get(self.task.get("language"), ""))
         self.editor.set_language(self.task.get("language", "python"))
         self.editor.locked = bool(self.task.get("locked"))
         self.editor.load(data.get("content", ""), fresh)
@@ -673,11 +704,13 @@ class MainWindow(QMainWindow):
     def run(self):
         if self.run_btn.isEnabled():
             self.show_output()
+            self.show_result_tab()
             self.send("run", stdin=self.stdin.toPlainText())
 
     def submit(self):
         if self.submit_btn.isEnabled() and self.submit_btn.isVisible():
             self.show_output()
+            self.show_result_tab()
             self.send("submit")
 
     def stop(self):
@@ -732,7 +765,7 @@ class MainWindow(QMainWindow):
             self.editor.go_to_line(d.intValue() - 1)
 
     def toggle_grid(self):
-        self.grid_area.setVisible(not self.grid_area.isVisible())
+        self.sidebar.setVisible(not self.sidebar.isVisible())
 
     def toggle_output(self):
         self.bottom.setVisible(not self.bottom.isVisible())
@@ -741,8 +774,9 @@ class MainWindow(QMainWindow):
         if not self.bottom.isVisible():
             self.bottom.show()
 
-    def toggle_stdin(self, on):
-        self.stdin.setVisible(on)
+    def show_result_tab(self):
+        self.result_tab.setChecked(True)
+        self.output_stack.setCurrentIndex(0)
 
     def zoom_in(self):
         self.editor.zoomIn(1)
@@ -760,89 +794,10 @@ class MainWindow(QMainWindow):
         elif text.startswith("cwm:line:"):
             self.editor.go_to_line(int(text.rsplit(":", 1)[1]) - 1)
 
-    # --- сетка ---
+    # --- сетка и результат ---
 
-    def columns(self):
-        width = self.grid_area.viewport().width() - 26
-        return max(3, (width + CELL_GAP) // (CELL_SIZE + CELL_GAP))
-
-    def rebuild_grid(self, force=False):
-        tree = self.state.get("tree") or {}
-        cols = self.columns()
-        sig = json.dumps([tree, self.key, cols, self.theme], sort_keys=True)
-        if sig == self.grid_sig and not force:
-            return
-        first = self.grid_sig is None or self.grid_cols == 0
-        self.grid_sig, self.grid_cols = sig, cols
-        scroll = self.grid_area.verticalScrollBar().value()
-        while self.grid_layout.count():
-            item = self.grid_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        self.active_cell = None
-        if tree:
-            head = QLabel(tree.get("title", ""))
-            head.setObjectName("gridTitle")
-            head.setWordWrap(True)
-            self.grid_layout.addWidget(head)
-            progress = QLabel(f'{tree.get("done", 0)} / {tree.get("total", 0)}')
-            progress.setObjectName("gridProgress")
-            self.grid_layout.addWidget(progress)
-            for row in tree.get("rows", []):
-                self.grid_layout.addWidget(self.make_row(row, cols))
-        self.grid_layout.addStretch(1)
-        if first and self.active_cell is not None:
-            cell = self.active_cell
-            QTimer.singleShot(0, lambda: self.grid_area.ensureWidgetVisible(cell))
-        else:
-            QTimer.singleShot(0, lambda: self.grid_area.verticalScrollBar().setValue(scroll))
-
-    def make_row(self, row: dict, cols: int):
-        frame = QFrame()
-        frame.setObjectName("row")
-        frame.setProperty("state", "done" if row.get("done") else "current" if row.get("current") else "")
-        box = QVBoxLayout(frame)
-        box.setContentsMargins(8, 5, 8, 7)
-        box.setSpacing(5)
-        href = row.get("href", "")
-        name = ClickLabel(row.get("title", ""), lambda h=href: self.open_task(h))
-        name.setObjectName("rowHead")
-        name.setWordWrap(True)
-        box.addWidget(name)
-        cells = row.get("cells")
-        if cells:
-            grid = QGridLayout()
-            grid.setSpacing(CELL_GAP)
-            grid.setContentsMargins(0, 0, 0, 0)
-            grid.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            for i, cell in enumerate(cells):
-                grid.addWidget(self.make_cell(cell), i // cols, i % cols)
-            box.addLayout(grid)
-        elif row.get("hint"):
-            hint = QLabel(row["hint"])
-            hint.setObjectName("muted")
-            hint.setWordWrap(True)
-            hint.setStyleSheet("font-size: 11px;")
-            box.addWidget(hint)
-        return frame
-
-    def make_cell(self, cell: dict):
-        b = QPushButton(str(cell.get("label", "")))
-        b.setObjectName("cell")
-        b.setFixedSize(CELL_SIZE, CELL_SIZE)
-        b.setCursor(Qt.CursorShape.PointingHandCursor)
-        active = cell.get("key") == self.key
-        done = bool(cell.get("done"))
-        b.setProperty("state", "doneactive" if active and done else "active" if active else "done" if done else "")
-        if cell.get("title"):
-            b.setToolTip(cell["title"])
-        href = cell.get("href", "")
-        b.clicked.connect(lambda _=False, h=href: self.open_task(h))
-        if active:
-            self.active_cell = b
-        return b
-
-    # --- результат ---
+    def rebuild_grid(self):
+        self.sidebar.show_tree(self.state.get("tree") or {}, self.key, self.t, palette(self.theme))
 
     def render_status(self):
         s = self.status
@@ -851,68 +806,7 @@ class MainWindow(QMainWindow):
             return
         had_result = self.status_sig is not None
         self.status_sig = sig
-        c = palette(self.theme)
-        esc = lambda x: html.escape(str(x), quote=False)
-        mono = f"font-family:'{code_family()}';"
-
-        def box(label, body, color=None, bg=None):
-            head = f'<div style="color:{c["dim"]};font-size:11px;">{esc(label)}</div>' if label else ""
-            return (
-                f'{head}<table width="100%" cellspacing="0" cellpadding="6" bgcolor="{bg or c["code"]}"><tr><td>'
-                f'<pre style="{mono}color:{color or c["fg2"]};white-space:pre-wrap;margin:0;">{body}</pre></td></tr></table>'
-                f'<div style="font-size:5px;">&nbsp;</div>'
-            )
-
-        doc = self.result.document()
-        doc.setDefaultStyleSheet(f"a {{ color: {c['lime']}; }}")
-        parts = []
-        if s:
-            result = s.get("result")
-            if result:
-                tone = {"ok": c["done"], "fail": c["rose"]}.get(result.get("tone"), c["fg"])
-                xp = f' <span style="color:{c["lime"]};">{esc(result["xp"])}</span>' if result.get("xp") else ""
-                parts.append(f'<div style="color:{tone};font-size:16px;font-weight:600;">{esc(result.get("title", ""))}{xp}</div>')
-            if s.get("next"):
-                parts.append(f'<div><a href="cwm:next" style="color:{c["lime"]};font-weight:600;">{esc(s["next"])} →</a></div>')
-            tests = s.get("tests")
-            if tests:
-                chips = []
-                for test in tests:
-                    tone = {"ok": c["done"], "fail": c["rose"]}.get(test.get("tone"), c["faint"])
-                    mark = test.get("verdict") or "…"
-                    chips.append(f'<span style="{mono}color:{tone};">{test.get("n")}:{esc(mark)}</span>')
-                parts.append("<div>" + " &nbsp; ".join(chips) + "</div>")
-            for item in s.get("diff") or []:
-                kind = item.get("kind")
-                color = c["rose"] if kind == "got" else c["done"] if kind == "want" else None
-                parts.append(box(item.get("label", ""), esc(item.get("text", "")[:MAX_OUTPUT]), color))
-            if s.get("error"):
-                parts.append(box(self.t["stderr"], link_errors(s["error"][:MAX_OUTPUT]), c["rose"], c["rosebg"]))
-            run = s.get("run")
-            if run:
-                bits = [esc(x) for x in (run.get("label"), run.get("time")) if x]
-                if bits:
-                    tone = c["rose"] if run.get("tone") == "fail" else c["mute"]
-                    parts.append(f'<div style="color:{tone};">{" · ".join(bits)}</div>')
-                out = run.get("stdout") or ""
-                if out:
-                    parts.append(box(self.t["stdout"], link_errors(out[:MAX_OUTPUT])))
-                elif not run.get("stderr"):
-                    parts.append(f'<div style="color:{c["faint"]};">{esc(self.t["no_output"])}</div>')
-                if run.get("stderr"):
-                    parts.append(box(self.t["stderr"], link_errors(run["stderr"][:MAX_OUTPUT]), c["rose"], c["rosebg"]))
-                for i, data in enumerate(run.get("images") or []):
-                    image = QImage.fromData(QByteArray(base64.b64decode(data.split(",", 1)[-1])))
-                    if not image.isNull():
-                        name = QUrl(f"cwmimg:{i}")
-                        doc.addResource(QTextDocument.ResourceType.ImageResource, name, image)
-                        width = min(image.width(), 520)
-                        parts.append(f'<div><img src="cwmimg:{i}" width="{width}"></div>')
-            if s.get("note"):
-                parts.append(f'<div style="color:{c["faint"]};font-size:11px;">{esc(s["note"])}</div>')
-        if not parts:
-            parts.append(f'<div style="color:{c["faint"]};">{esc(self.t["output_empty"])}</div>')
-        self.result.setHtml("".join(parts))
+        self.run_time.setText(self.result_panel.show_status(s, self.t, palette(self.theme)))
         if had_result and s and (s.get("result") or s.get("run")):
             self.show_output()
 

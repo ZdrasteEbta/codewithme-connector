@@ -36,6 +36,8 @@ SCI_MOVESELECTEDLINESDOWN = 2621
 SCI_MULTIPLESELECTADDNEXT = 2688
 SCI_TARGETWHOLEDOCUMENT = 2690
 SCI_SETKEYWORDS = 4005
+SCI_SETEXTRAASCENT = 2525
+SCI_SETEXTRADESCENT = 2527
 SCFIND_MATCHCASE = 4
 
 RUST_KEYWORDS = (
@@ -123,6 +125,8 @@ class CodeEditor(QsciScintilla):
         self.SendScintilla(SCI_SETADDITIONALSELECTIONTYPING, 1)
         self.SendScintilla(SCI_SETMULTIPASTE, 1)
 
+        self.SendScintilla(SCI_SETEXTRAASCENT, 2)
+        self.SendScintilla(SCI_SETEXTRADESCENT, 2)
         self.markerDefine(QsciScintilla.MarkerSymbol.Background, REGION_MARKER)
         self._free_shortcuts()
 

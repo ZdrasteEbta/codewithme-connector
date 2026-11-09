@@ -5,13 +5,13 @@ import traceback
 from pathlib import Path
 
 from PyQt6.QtCore import QSettings
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import QApplication, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
 
 from backend import Api, Helper
 from texts import TEXTS, system_locale
-from theme import palette, stylesheet
+from theme import load_fonts, palette, stylesheet, ui_family
 from window import MainWindow
 
 INSTANCE = "CodeWithMeIDE"
@@ -72,6 +72,8 @@ def main() -> int:
     app.setApplicationName("CodeWithMe IDE")
     app.setOrganizationName("CodeWithMe")
     app.setStyle("Fusion")
+    load_fonts()
+    app.setFont(QFont(ui_family(), 10))
     icon = QIcon(resource("icon.png"))
     app.setWindowIcon(icon)
 

@@ -31,6 +31,7 @@ args = [
     "--icon", str(here / "icon.ico"),
     "--add-binary", f"{helper}{sep}.",
     "--add-data", f"{here / 'icon.png'}{sep}.",
+    "--add-data", f"{here / 'fonts'}{sep}fonts",
 ]
 for name in unused:
     args += ["--exclude-module", name]

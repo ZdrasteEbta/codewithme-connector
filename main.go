@@ -1,6 +1,6 @@
-// Коннектор CodeWithMe: связывает сайт codewithme.app с папкой на компьютере ученика.
-// Python, Node.js и библиотеки ставятся в эту папку при первом запуске кода,
-// задачи выполняются на компьютере, а решения лежат в файлах, которые можно открыть в любом редакторе.
+﻿// РљРѕРЅРЅРµРєС‚РѕСЂ CodeWithMe: СЃРІСЏР·С‹РІР°РµС‚ СЃР°Р№С‚ codewithme.app СЃ РїР°РїРєРѕР№ РЅР° РєРѕРјРїСЊСЋС‚РµСЂРµ СѓС‡РµРЅРёРєР°.
+// Python, Node.js Рё Р±РёР±Р»РёРѕС‚РµРєРё СЃС‚Р°РІСЏС‚СЃСЏ РІ СЌС‚Сѓ РїР°РїРєСѓ РїСЂРё РїРµСЂРІРѕРј Р·Р°РїСѓСЃРєРµ РєРѕРґР°,
+// Р·Р°РґР°С‡Рё РІС‹РїРѕР»РЅСЏСЋС‚СЃСЏ РЅР° РєРѕРјРїСЊСЋС‚РµСЂРµ, Р° СЂРµС€РµРЅРёСЏ Р»РµР¶Р°С‚ РІ С„Р°Р№Р»Р°С…, РєРѕС‚РѕСЂС‹Рµ РјРѕР¶РЅРѕ РѕС‚РєСЂС‹С‚СЊ РІ Р»СЋР±РѕРј СЂРµРґР°РєС‚РѕСЂРµ.
 package main
 
 import (
@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var version = "0.5.1" // заменяется при сборке релиза: -ldflags "-X main.version=…"
+var version = "0.5.2" // Р·Р°РјРµРЅСЏРµС‚СЃСЏ РїСЂРё СЃР±РѕСЂРєРµ СЂРµР»РёР·Р°: -ldflags "-X main.version=вЂ¦"
 
 const site = "https://codewithme.app"
 
@@ -28,19 +28,19 @@ const configName = "cwm-connector.json"
 func itoa(n int) string { return strconv.Itoa(n) }
 
 func main() {
-	dev := flag.Bool("dev", false, "разрешить также локальную разработку сайта (localhost:3000)")
-	folderFlag := flag.String("folder", "", "папка CodeWithMe (по умолчанию спросить при первом запуске)")
-	desktop := flag.Bool("desktop", false, "работать внутри приложения CodeWithMe IDE и завершиться вместе с ним")
+	dev := flag.Bool("dev", false, "СЂР°Р·СЂРµС€РёС‚СЊ С‚Р°РєР¶Рµ Р»РѕРєР°Р»СЊРЅСѓСЋ СЂР°Р·СЂР°Р±РѕС‚РєСѓ СЃР°Р№С‚Р° (localhost:3000)")
+	folderFlag := flag.String("folder", "", "РїР°РїРєР° CodeWithMe (РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ СЃРїСЂРѕСЃРёС‚СЊ РїСЂРё РїРµСЂРІРѕРј Р·Р°РїСѓСЃРєРµ)")
+	desktop := flag.Bool("desktop", false, "СЂР°Р±РѕС‚Р°С‚СЊ РІРЅСѓС‚СЂРё РїСЂРёР»РѕР¶РµРЅРёСЏ CodeWithMe IDE Рё Р·Р°РІРµСЂС€РёС‚СЊСЃСЏ РІРјРµСЃС‚Рµ СЃ РЅРёРј")
 	flag.Parse()
 
 	fmt.Printf("CodeWithMe IDE %s\n", version)
 	folder, err := chooseFolder(*folderFlag)
 	if err != nil {
-		fail("Не удалось выбрать папку: %v", err)
+		fail("РќРµ СѓРґР°Р»РѕСЃСЊ РІС‹Р±СЂР°С‚СЊ РїР°РїРєСѓ: %v", err)
 	}
 	ws := &Workspace{Root: folder}
 	if err := ws.Prepare(); err != nil {
-		fail("Не удалось создать папку %s: %v", folder, err)
+		fail("РќРµ СѓРґР°Р»РѕСЃСЊ СЃРѕР·РґР°С‚СЊ РїР°РїРєСѓ %s: %v", folder, err)
 	}
 
 	var ln net.Listener
@@ -53,7 +53,7 @@ func main() {
 		}
 	}
 	if ln == nil {
-		fail("Порты 47615–47619 заняты: возможно, коннектор или мост уже запущен в другом окне.")
+		fail("РџРѕСЂС‚С‹ 47615вЂ“47619 Р·Р°РЅСЏС‚С‹: РІРѕР·РјРѕР¶РЅРѕ, РєРѕРЅРЅРµРєС‚РѕСЂ РёР»Рё РјРѕСЃС‚ СѓР¶Рµ Р·Р°РїСѓС‰РµРЅ РІ РґСЂСѓРіРѕРј РѕРєРЅРµ.")
 	}
 
 	origins := map[string]bool{site: true, "https://www.codewithme.app": true}
@@ -76,10 +76,10 @@ func main() {
 	if *dev {
 		srv.siteBase = devOrigins[0]
 	}
-	fmt.Printf("Папка: %s\n", folder)
-	fmt.Printf("Работает на 127.0.0.1:%d. Чтобы выключить — Ctrl+C или закройте это окно.\n", port)
+	fmt.Printf("РџР°РїРєР°: %s\n", folder)
+	fmt.Printf("Р Р°Р±РѕС‚Р°РµС‚ РЅР° 127.0.0.1:%d. Р§С‚РѕР±С‹ РІС‹РєР»СЋС‡РёС‚СЊ вЂ” Ctrl+C РёР»Рё Р·Р°РєСЂРѕР№С‚Рµ СЌС‚Рѕ РѕРєРЅРѕ.\n", port)
 	if *dev {
-		fmt.Println("Режим разработки: принимаются запросы и с localhost:3000.")
+		fmt.Println("Р РµР¶РёРј СЂР°Р·СЂР°Р±РѕС‚РєРё: РїСЂРёРЅРёРјР°СЋС‚СЃСЏ Р·Р°РїСЂРѕСЃС‹ Рё СЃ localhost:3000.")
 	}
 	fmt.Printf("CWM_PORT=%d\n", port)
 	if *desktop {
@@ -93,13 +93,13 @@ func main() {
 
 func fail(format string, args ...any) {
 	fmt.Printf(format+"\n", args...)
-	fmt.Println("Нажмите Enter, чтобы закрыть окно.")
+	fmt.Println("РќР°Р¶РјРёС‚Рµ Enter, С‡С‚РѕР±С‹ Р·Р°РєСЂС‹С‚СЊ РѕРєРЅРѕ.")
 	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 	os.Exit(1)
 }
 
-// chooseFolder: --folder; папка, в которой лежит сама программа (если это уже папка CodeWithMe);
-// сохранённый выбор; иначе спросить ученика (Enter — папка по умолчанию).
+// chooseFolder: --folder; РїР°РїРєР°, РІ РєРѕС‚РѕСЂРѕР№ Р»РµР¶РёС‚ СЃР°РјР° РїСЂРѕРіСЂР°РјРјР° (РµСЃР»Рё СЌС‚Рѕ СѓР¶Рµ РїР°РїРєР° CodeWithMe);
+// СЃРѕС…СЂР°РЅС‘РЅРЅС‹Р№ РІС‹Р±РѕСЂ; РёРЅР°С‡Рµ СЃРїСЂРѕСЃРёС‚СЊ СѓС‡РµРЅРёРєР° (Enter вЂ” РїР°РїРєР° РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ).
 func chooseFolder(flagValue string) (string, error) {
 	exe, _ := os.Executable()
 	exeDir := filepath.Dir(exe)
@@ -132,9 +132,9 @@ func chooseFolder(flagValue string) (string, error) {
 	}
 	def := filepath.Join(home, "CodeWithMe")
 	fmt.Println()
-	fmt.Println("Выберите папку для занятий. В ней будет всё: Python, библиотеки, ваш код и решения.")
-	fmt.Println("Чтобы потом удалить всё, что поставил коннектор, достаточно удалить эту папку.")
-	fmt.Printf("Нажмите Enter, чтобы использовать %s,\nили вставьте путь к другой папке и нажмите Enter: ", def)
+	fmt.Println("Р’С‹Р±РµСЂРёС‚Рµ РїР°РїРєСѓ РґР»СЏ Р·Р°РЅСЏС‚РёР№. Р’ РЅРµР№ Р±СѓРґРµС‚ РІСЃС‘: Python, Р±РёР±Р»РёРѕС‚РµРєРё, РІР°С€ РєРѕРґ Рё СЂРµС€РµРЅРёСЏ.")
+	fmt.Println("Р§С‚РѕР±С‹ РїРѕС‚РѕРј СѓРґР°Р»РёС‚СЊ РІСЃС‘, С‡С‚Рѕ РїРѕСЃС‚Р°РІРёР» РєРѕРЅРЅРµРєС‚РѕСЂ, РґРѕСЃС‚Р°С‚РѕС‡РЅРѕ СѓРґР°Р»РёС‚СЊ СЌС‚Сѓ РїР°РїРєСѓ.")
+	fmt.Printf("РќР°Р¶РјРёС‚Рµ Enter, С‡С‚РѕР±С‹ РёСЃРїРѕР»СЊР·РѕРІР°С‚СЊ %s,\nРёР»Рё РІСЃС‚Р°РІСЊС‚Рµ РїСѓС‚СЊ Рє РґСЂСѓРіРѕР№ РїР°РїРєРµ Рё РЅР°Р¶РјРёС‚Рµ Enter: ", def)
 	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
 	line = strings.Trim(strings.TrimSpace(line), `"'`)
 	folder := def
