@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var version = "0.5.0" // заменяется при сборке релиза: -ldflags "-X main.version=…"
+var version = "0.5.1" // заменяется при сборке релиза: -ldflags "-X main.version=…"
 
 const site = "https://codewithme.app"
 
