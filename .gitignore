@@ -3,3 +3,8 @@
 /cwm-connector.json
 /dist/
 /CodeWithMe/
+/desktop/build/
+/desktop/dist/
+/desktop/__pycache__/
+/codewithme-helper
+/codewithme-helper.exe

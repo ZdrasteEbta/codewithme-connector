@@ -30,9 +30,16 @@ type Server struct {
 	runs    *Runs
 	inst    *Installer
 	tasks   *Tasks
+	ide     *IDE
+	// siteBase — адрес сайта, который открывает кнопка окна IDE
+	siteBase string
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/app" || strings.HasPrefix(r.URL.Path, "/app/") {
+		s.serveApp(w, r)
+		return
+	}
 	origin := r.Header.Get("Origin")
 	host := r.Host
 	if !s.origins[origin] || (host != "127.0.0.1:"+itoa(s.port) && host != "localhost:"+itoa(s.port)) {
@@ -63,6 +70,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(200, map[string]any{
 			"bridge":    protocol,
 			"connector": true,
+			"ide":       true,
 			"version":   version,
 			"python":    python,
 			"os":        osName(),
@@ -212,6 +220,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		reply(200, map[string]any{"name": name})
+
+	case r.Method == http.MethodGet && r.URL.Path == "/ide/next":
+		reply(200, map[string]any{"cmd": s.ide.NextCommand(r.Context(), sitePollWait)})
+
+	case r.Method == http.MethodPost && (r.URL.Path == "/ide/tree" || r.URL.Path == "/ide/current" || r.URL.Path == "/ide/status"):
+		var data json.RawMessage
+		if !readJSON(r, &data) {
+			reply(400, map[string]any{"error": "bad-request"})
+			return
+		}
+		switch r.URL.Path {
+		case "/ide/tree":
+			s.ide.SetTree(data)
+		case "/ide/current":
+			s.ide.SetCurrent(data)
+		default:
+			s.ide.SetStatus(data)
+		}
+		reply(200, map[string]any{"ok": true})
 
 	default:
 		reply(404, map[string]any{"error": "not-found"})

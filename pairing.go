@@ -62,6 +62,19 @@ func (p *Pairing) newCode() {
 	fmt.Println()
 }
 
+// Code — действующий код для окна IDE
+func (p *Pairing) Code() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.locked {
+		return ""
+	}
+	if time.Now().After(p.codeUntil) {
+		p.newCode()
+	}
+	return p.code
+}
+
 // Pair возвращает токен или причину отказа: wrong, expired, locked
 func (p *Pairing) Pair(code string) (string, string) {
 	p.mu.Lock()

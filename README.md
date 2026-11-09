@@ -1,8 +1,8 @@
-# Коннектор CodeWithMe
+# CodeWithMe IDE
 
 **[English below](#english)**
 
-Небольшая программа с открытым кодом, которая связывает сайт [codewithme.app](https://codewithme.app) с папкой на вашем компьютере.
+Маленький редактор кода с открытым исходным кодом. Условие задачи открыто на сайте [codewithme.app](https://codewithme.app), а код, запуск, отправка и результат находятся в приложении. Слева сетка тем и задач, как на сайте. Бинды смотрите по F1.
 
 - **Всё в одной папке.** При первом запуске вы выбираете папку (по умолчанию `CodeWithMe` в домашней папке). Туда и только туда коннектор ставит Python, Node.js, Rust, библиотеки и складывает ваш код.
 - **Ставится только то, что вы учите.** Пока вы просто читаете уроки, ничего не скачивается. Python скачивается, когда вы впервые запускаете код на Python, библиотека numpy — когда впервые запускаете задачу курса numpy, Node.js — когда впервые запускаете JavaScript, Rust (около 800 МБ на диске) — когда впервые запускаете задачу курса Rust, а cargo и игровой движок macroquad — когда впервые открываете курс игр на Rust.
@@ -13,13 +13,13 @@
 ## Как пользоваться
 
 1. Скачайте файл для своей системы со страницы [Releases](https://github.com/ZdrasteEbta/codewithme-connector/releases/latest):
-   - Windows — `cwm-connector-windows-amd64.exe`
-   - macOS (M1–M4) — `cwm-connector-macos-arm64`, macOS (Intel) — `cwm-connector-macos-amd64`
-   - Linux — `cwm-connector-linux-amd64`
-2. Запустите его. Windows может предупредить «Windows защитила ваш компьютер» — программа не подписана платным сертификатом; нажмите «Подробнее» → «Выполнить в любом случае». На macOS: правый клик по файлу → «Открыть».
-3. Нажмите Enter, чтобы использовать папку по умолчанию, или вставьте путь к своей.
-4. Откройте задачу на codewithme.app и введите код из 6 цифр, который показал коннектор. Если браузер спросит про доступ к устройствам в локальной сети — разрешите.
-5. Пока окно коннектора открыто, задачи выполняются на компьютере, а решения лежат в папке. Чтобы выключить — закройте окно.
+   - Windows — `CodeWithMe-IDE-windows-amd64.exe`
+   - macOS (M1–M4) — `CodeWithMe-IDE-macos-arm64.zip`, macOS (Intel) — `CodeWithMe-IDE-macos-amd64.zip`
+   - Linux — `CodeWithMe-IDE-linux-amd64`
+2. Запустите его. Windows может предупредить «Windows защитила ваш компьютер» — программа не подписана платным сертификатом; нажмите «Подробнее» → «Выполнить в любом случае». На macOS: правый клик по приложению → «Открыть».
+3. Выберите папку для занятий или оставьте предложенную.
+4. Откройте codewithme.app и введите код из 6 цифр, который показало приложение. Если браузер спросит про доступ к устройствам в локальной сети — разрешите.
+5. Выбирайте задачу в сетке слева: условие откроется на сайте, код — в приложении. Чтобы выключить — закройте окно.
 
 ## Что лежит в папке
 
@@ -57,24 +57,26 @@ CodeWithMe/
 
 ## Сборка самостоятельно
 
-Нужен Go 1.22+. Сторонних зависимостей нет.
+Нужны Go 1.22+ и Python 3.12.
 
 ```
-go build -o cwm-connector .
-./cwm-connector --folder ./CodeWithMe
+go build -o codewithme-helper .
+pip install -r desktop/requirements.txt
+python desktop/main.py --folder ./CodeWithMe
+python desktop/build.py
 ```
 
-`--dev` дополнительно разрешает запросы с `http://localhost:3000` (локальная разработка сайта).
+Программа на Go запускает код и связывается с сайтом, окно написано на Python и Qt (папка `desktop/`). `--dev` дополнительно разрешает запросы с `http://localhost:3000` (локальная разработка сайта).
 
-Проверка контрольной суммы скачанного файла: сравните вывод `certutil -hashfile cwm-connector-windows-amd64.exe SHA256` (Windows) или `shasum -a 256 <файл>` (macOS/Linux) с файлом `SHA256SUMS.txt` в релизе.
+Проверка контрольной суммы скачанного файла: сравните вывод `certutil -hashfile CodeWithMe-IDE-windows-amd64.exe SHA256` (Windows) или `shasum -a 256 <файл>` (macOS/Linux) с файлом `SHA256SUMS.txt` в релизе.
 
-Лицензия — MIT.
+Лицензия: программа на Go — MIT. Папка `desktop/` использует PyQt6 и QScintilla, поэтому она и собранное приложение распространяются по GPL-3.0.
 
 ---
 
 ## English
 
-A small open-source program that links [codewithme.app](https://codewithme.app) to a folder on your computer.
+A small open-source code editor. The task statement stays on [codewithme.app](https://codewithme.app); your code, Run, Submit and the result live in the app. The left side is a grid of topics and tasks, like the website. Press F1 for the keyboard shortcuts.
 
 - **Everything in one folder.** On first start you pick a folder (default: `CodeWithMe` in your home directory). Python, Node.js, Rust, libraries and your code go there and nowhere else.
 - **Only what you learn gets installed.** Nothing is downloaded while you just read lessons. Python is fetched the first time you run Python code, numpy the first time you run a numpy task, Node.js the first time you run JavaScript, Rust (about 800 MB on disk) the first time you run a Rust task, cargo and the macroquad game engine the first time you open the Rust games course.
@@ -82,8 +84,8 @@ A small open-source program that links [codewithme.app](https://codewithme.app) 
 - **Tasks run on your computer.** Checking answers and progress stay on the site.
 - **Delete the folder to remove everything.** The connector never touches PATH, the registry or system settings.
 
-Usage: download the file for your OS from [Releases](https://github.com/ZdrasteEbta/codewithme-connector/releases/latest), run it, press Enter to accept the default folder, then enter the 6-digit code it shows on a codewithme.app task page.
+Usage: download the file for your OS from [Releases](https://github.com/ZdrasteEbta/codewithme-connector/releases/latest), run it, choose a folder, then enter the 6-digit code it shows on codewithme.app. Pick a task in the grid: the statement opens on the website and the code opens in the app.
 
 Security: listens on `127.0.0.1` only, accepts requests only from `https://codewithme.app` pages, requires pairing with a one-time 6-digit code, downloads runtimes only from official sources with SHA-256 verification. Rust crates come only from a built-in, version-pinned kit list (macroquad) and are built with `--locked`. It is not a sandbox: your programs run with your permissions.
 
-Build: `go build -o cwm-connector .` (Go 1.22+, no dependencies). License: MIT.
+Build: `go build -o codewithme-helper .`, then `pip install -r desktop/requirements.txt` and `python desktop/build.py` (Go 1.22+, Python 3.12). License: the Go program is MIT; `desktop/` uses PyQt6 and QScintilla, so it and the packaged app are GPL-3.0.

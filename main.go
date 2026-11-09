@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var version = "0.4.0" // заменяется при сборке релиза: -ldflags "-X main.version=…"
+var version = "0.5.0" // заменяется при сборке релиза: -ldflags "-X main.version=…"
 
 const site = "https://codewithme.app"
 
@@ -30,9 +30,10 @@ func itoa(n int) string { return strconv.Itoa(n) }
 func main() {
 	dev := flag.Bool("dev", false, "разрешить также локальную разработку сайта (localhost:3000)")
 	folderFlag := flag.String("folder", "", "папка CodeWithMe (по умолчанию спросить при первом запуске)")
+	desktop := flag.Bool("desktop", false, "работать внутри приложения CodeWithMe IDE и завершиться вместе с ним")
 	flag.Parse()
 
-	fmt.Printf("Коннектор CodeWithMe %s\n", version)
+	fmt.Printf("CodeWithMe IDE %s\n", version)
 	folder, err := chooseFolder(*folderFlag)
 	if err != nil {
 		fail("Не удалось выбрать папку: %v", err)
@@ -62,18 +63,27 @@ func main() {
 		}
 	}
 	srv := &Server{
-		port:    port,
-		origins: origins,
-		ws:      ws,
-		pairing: NewPairing(ws.Path(".cwm", "tokens.json")),
-		runs:    NewRuns(),
-		inst:    NewInstaller(ws),
-		tasks:   NewTasks(ws),
+		port:     port,
+		origins:  origins,
+		ws:       ws,
+		pairing:  NewPairing(ws.Path(".cwm", "tokens.json")),
+		runs:     NewRuns(),
+		inst:     NewInstaller(ws),
+		tasks:    NewTasks(ws),
+		ide:      NewIDE(ws.Path(".cwm", "ide-tree.json")),
+		siteBase: site,
+	}
+	if *dev {
+		srv.siteBase = devOrigins[0]
 	}
 	fmt.Printf("Папка: %s\n", folder)
 	fmt.Printf("Работает на 127.0.0.1:%d. Чтобы выключить — Ctrl+C или закройте это окно.\n", port)
 	if *dev {
 		fmt.Println("Режим разработки: принимаются запросы и с localhost:3000.")
+	}
+	fmt.Printf("CWM_PORT=%d\n", port)
+	if *desktop {
+		go srv.watchWindow()
 	}
 	server := &http.Server{Handler: srv, ReadHeaderTimeout: 10 * time.Second}
 	if err := server.Serve(ln); err != nil {
