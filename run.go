@@ -236,11 +236,12 @@ type Runs struct {
 	mu        sync.Mutex
 	procs     map[string]*exec.Cmd
 	cancelled map[string]bool
+	live      map[string]*liveRun
 	slots     chan struct{}
 }
 
 func NewRuns() *Runs {
-	return &Runs{procs: map[string]*exec.Cmd{}, cancelled: map[string]bool{}, slots: make(chan struct{}, maxParallel)}
+	return &Runs{procs: map[string]*exec.Cmd{}, cancelled: map[string]bool{}, live: map[string]*liveRun{}, slots: make(chan struct{}, maxParallel)}
 }
 
 func (r *Runs) Cancel(id string) bool {

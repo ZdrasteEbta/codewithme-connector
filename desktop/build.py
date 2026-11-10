@@ -1,6 +1,14 @@
-"""Собирает приложение одним файлом. Помощник на Go должен лежать рядом: ../codewithme-helper[.exe]."""
+"""Собирает приложение. Помощник на Go должен лежать рядом: ../codewithme-helper[.exe].
+
+Windows: PyInstaller собирает папку, а запускалка на Go (../launcher) прячет её в один .exe и
+распаковывает при первом запуске версии в %USERPROFILE%/.codewithme — так окно открывается за секунду, а не после распаковки каждый раз.
+Нужен go (переменная GO или go в PATH). macOS: папка .app. Linux: один файл."""
 import os
+import re
+import shutil
+import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import PyInstaller.__main__
@@ -23,8 +31,9 @@ args = [
     str(here / "main.py"),
     "--name", "CodeWithMe-IDE",
     "--noconfirm", "--clean", "--windowed",
-    "--onedir" if sys.platform == "darwin" else "--onefile",  # на macOS приложением считается папка .app
-    "--distpath", str(here / "dist"),
+    "--onedir" if sys.platform in ("darwin", "win32") else "--onefile",  # на macOS приложением считается папка .app
+    # На Windows папка приложения — только заготовка для запускалки: кладём её в build, в dist будет один .exe
+    "--distpath", str(here / ("build/app" if sys.platform == "win32" else "dist")),
     "--workpath", str(here / "build"),
     "--specpath", str(here / "build"),
     "--paths", str(here),
@@ -41,3 +50,23 @@ args = [
 for name in unused:
     args += ["--exclude-module", name]
 PyInstaller.__main__.run(args)
+
+if sys.platform == "win32":
+    root = here.parent
+    version = os.environ.get("VERSION") or re.search(r'var version = "([^"]+)"', (root / "main.go").read_text("utf-8")).group(1)
+    folder = here / "build" / "app" / "CodeWithMe-IDE"
+    archive = root / "launcher" / "app.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
+        for path in sorted(folder.rglob("*")):
+            if path.is_file():
+                z.write(path, path.relative_to(folder).as_posix())
+    go = os.environ.get("GO") or shutil.which("go")
+    if not go:
+        sys.exit("Нет go: укажите путь в переменной GO")
+    (here / "dist").mkdir(exist_ok=True)
+    out = here / "dist" / "CodeWithMe-IDE.exe"
+    env = {**os.environ, "CGO_ENABLED": "0", "GOOS": "windows", "GOARCH": "amd64"}
+    subprocess.run([go, "build", "-trimpath", "-ldflags", f"-s -w -H windowsgui -X main.version={version}", "-o", str(out), "."],
+                   cwd=root / "launcher", env=env, check=True)
+    archive.unlink()
+    print(f"Готово: {out} (версия {version})")

@@ -6,7 +6,7 @@ import re
 import time
 
 from PyQt6.QtCore import QByteArray, QSize, Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QFont, QFontMetrics, QIcon, QImage, QTextDocument
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QImage, QTextCharFormat, QTextCursor, QTextDocument
 from PyQt6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
     QSplitter, QTextBrowser, QVBoxLayout, QWidget, QWidgetAction,
@@ -522,6 +522,31 @@ class DocTabs(QWidget):
             self.current -= 1
 
 
+class InputBox(QPlainTextEdit):
+    """Строка ввода под журналом, как в терминале: Enter отдаёт текст программе,
+    Shift+Enter — новая строка, Ctrl+D — конец ввода. Пока ничего не запущено,
+    написанное здесь уйдёт программе при следующем запуске файла."""
+
+    submitted = pyqtSignal(str)
+    eof = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.live = False
+
+    def keyPressEvent(self, e):
+        mods = e.modifiers()
+        if self.live and e.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not mods & Qt.KeyboardModifier.ShiftModifier:
+            text = self.toPlainText()
+            self.clear()
+            self.submitted.emit(text)
+            return
+        if self.live and e.key() == Qt.Key.Key_D and mods & Qt.KeyboardModifier.ControlModifier:
+            self.eof.emit()
+            return
+        super().keyPressEvent(e)
+
+
 class ResultPanel(QWidget):
     """Вердикт, тесты, сравнение ответов и вывод программы."""
 
@@ -589,19 +614,22 @@ class ResultPanel(QWidget):
         self.log_title.setObjectName("logTitle")
         self.log_clear = button(kind="quiet")
         self.log_clear.clicked.connect(lambda: self.log_box.clear())
+        self.log_hide = button(kind="quiet")
         lb.addWidget(self.log_title, 1)
         lb.addWidget(self.log_clear)
+        lb.addWidget(self.log_hide)
         self.log_box = QPlainTextEdit()
         self.log_box.setObjectName("logBox")
         self.log_box.setReadOnly(True)
         self.log_box.setMaximumBlockCount(MAX_LOG_BLOCKS)
         self.log_box.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
-        self.stdin = QPlainTextEdit()
+        self.stdin = InputBox()
         self.stdin.setObjectName("stdinBox")
         self.stdin.setFixedHeight(48)
         lv.addWidget(log_bar)
-        lv.addWidget(self.stdin)
         lv.addWidget(self.log_box, 1)
+        lv.addWidget(self.stdin)
+        self.console = log_host  # окно встраивает вывод программы над тестами, отдельной панели нет
         split = QSplitter(Qt.Orientation.Vertical)
         split.setHandleWidth(1)
         split.addWidget(self.browser)
@@ -610,9 +638,33 @@ class ResultPanel(QWidget):
         root.addWidget(split, 1)
 
     def set_texts(self, t):
+        self.t = t
         self.log_title.setText(t["debug_log"])
         self.log_clear.setText(t["debug_clear"])
-        self.stdin.setPlaceholderText(t["file_stdin"])
+        self.log_hide.setText(t["console_hide"])
+        self.set_live(self.stdin.live)
+
+    def set_live(self, live: bool):
+        """Программа запущена и читает ввод: строка ввода отправляет текст сразу по Enter."""
+        self.stdin.live = live
+        t = getattr(self, "t", None)
+        if t:
+            self.stdin.setPlaceholderText(t["file_input_live"] if live else t["file_stdin"])
+        if live:
+            self.log_box.appendPlainText("")  # вывод программы пойдёт с новой строки
+
+    def write(self, text: str, color=None):
+        """Дописывает вывод работающей программы прямо в конец журнала, без перевода строки."""
+        if not text:
+            return
+        cursor = self.log_box.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        fmt = QTextCharFormat()
+        if color:
+            fmt.setForeground(QColor(color))
+        cursor.insertText(text.replace("\r\n", "\n"), fmt)
+        bar = self.log_box.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def log(self, title: str, body: str = "", error: str = "", c=None):
         """Добавляет запись в журнал: заголовок, вывод программы и ошибки красным."""

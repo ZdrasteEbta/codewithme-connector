@@ -45,7 +45,7 @@ jobs:
       - name: Build app
         run: |
           pip install -r desktop/requirements.txt
-          python desktop/build.py
+          VERSION="${GITHUB_REF_NAME#v}" python desktop/build.py # на Windows ещё собирает запускалку из launcher/
       - name: Collect
         run: |
           mkdir out

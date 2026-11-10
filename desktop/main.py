@@ -9,10 +9,8 @@ from PyQt6.QtGui import QFont, QIcon
 from PyQt6.QtNetwork import QLocalServer, QLocalSocket
 from PyQt6.QtWidgets import QApplication, QDialog, QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QVBoxLayout
 
-from backend import Api, Helper
 from texts import TEXTS, system_locale
-from theme import load_fonts, palette, stylesheet, ui_family
-from window import MainWindow
+from theme import load_fonts, logo_family, palette, stylesheet, ui_family
 
 INSTANCE = "CodeWithMeIDE"
 
@@ -92,7 +90,8 @@ def main() -> int:
     settings = QSettings("CodeWithMe", "IDE-dev" if args.dev else "IDE")
     locale = settings.value("locale", system_locale())
     t = TEXTS.get(locale, TEXTS["ru"])
-    app.setStyleSheet(stylesheet(palette(settings.value("theme", "dark"))))
+    c = palette(settings.value("theme", "dark"))
+    app.setStyleSheet(stylesheet(c))
 
     folder = args.folder or settings.value("folder", "")
     if not folder:
@@ -102,20 +101,37 @@ def main() -> int:
     if not args.folder:
         settings.setValue("folder", folder)
 
+    # Заставка появляется сразу, а тяжёлые модули окна грузятся уже под ней
+    from splash import Splash
+    splash = Splash(c, "CodeWithMe IDE", t["splash"], ui_family(), logo_family())
+    splash.show()
+    splash.pump()
+    from backend import Api, Helper
+    splash.pump()
+    from window import MainWindow
+    splash.pump()
+
     try:
         helper = Helper(folder, args.dev)
     except OSError as err:
+        splash.close()
         QMessageBox.critical(None, "CodeWithMe IDE", f'{t["start_failed"]}\n\n{err}')
         return 1
-    if not helper.wait_ready():
+    while not helper.wait_ready(0.03) and helper.proc.poll() is None and not helper.timed_out():
+        splash.pump()
+    if not helper.port:
+        splash.close()
         details = "\n".join(helper.last_lines)
         helper.stop()
         QMessageBox.critical(None, "CodeWithMe IDE", f'{t["start_failed"]}\n\n{details}')
         return 1
 
+    splash.pump()
     window = MainWindow(Api(helper.port), settings)
+    splash.pump()
     window.show()
     window.dark_title_bar()
+    splash.close()
 
     def wake():
         peer = instance.nextPendingConnection()

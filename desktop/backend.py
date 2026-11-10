@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 from collections import deque
 from pathlib import Path
@@ -41,6 +42,7 @@ class Helper:
         self.port = 0
         self.last_lines: deque[str] = deque(maxlen=20)
         self._ready = threading.Event()
+        self.started = time.monotonic()
         threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self) -> None:
@@ -51,6 +53,9 @@ class Helper:
                 self.port = int(line.split("=", 1)[1])
                 self._ready.set()
         self._ready.set()  # помощник завершился: ждать больше нечего
+
+    def timed_out(self, limit: float = 20) -> bool:
+        return time.monotonic() - self.started > limit
 
     def wait_ready(self, timeout: float = 20) -> bool:
         self._ready.wait(timeout)
