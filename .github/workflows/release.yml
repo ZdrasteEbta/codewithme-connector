@@ -43,6 +43,8 @@ jobs:
           EXT=""; [ "$RUNNER_OS" = Windows ] && EXT=".exe"
           CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o "codewithme-helper$EXT" .
       - name: Build app
+        env:
+          PYTHONUTF8: "1" # кириллица в выводе сборки не должна ронять её на Windows
         run: |
           pip install -r desktop/requirements.txt
           VERSION="${GITHUB_REF_NAME#v}" python desktop/build.py # на Windows ещё собирает запускалку из launcher/
