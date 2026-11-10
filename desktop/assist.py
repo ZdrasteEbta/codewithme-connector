@@ -196,10 +196,11 @@ class Assistant(QObject):
         checked = bool(report and report.checked and self.language)
         bar.problem_row.setVisible(checked)
         problem = self._current_problem() if checked else None
-        bar.problem_row.setProperty("bad", bool(problem))
-        for widget in (bar.problem_row, bar.problem):  # свойство поменялось: стиль надо применить заново
-            widget.style().unpolish(widget)
-            widget.style().polish(widget)
+        if bar.problem_row.property("bad") != bool(problem):
+            bar.problem_row.setProperty("bad", bool(problem))
+            for widget in (bar.problem_row, bar.problem):  # свойство поменялось: стиль надо применить заново
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
         if checked and not problem:
             bar.problem.setText(html.escape(t["no_problems"]))
             bar.more.clear()

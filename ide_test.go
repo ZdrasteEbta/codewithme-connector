@@ -92,13 +92,31 @@ func TestAppInstall(t *testing.T) {
 	for _, bad := range []string{
 		`{"language":"python","pip":["--index-url=http://x"]}`,
 		`{"language":"node","npm":["../evil"]}`,
-		`{"language":"rust"}`,
+		`{"language":"go"}`,
 	} {
 		if w := ideRequest(s, http.MethodPost, "/app/install", bad, self); w.Code != 400 {
 			t.Fatalf("%s принят: %d", bad, w.Code)
 		}
 	}
-	w := ideRequest(s, http.MethodGet, "/app/env", "", nil)
+	run := `{"runId":"t1","language":"python","code":"print(1)","stdin":"","timeLimitMs":1000,"outputLimitBytes":1000}`
+	if w := ideRequest(s, http.MethodPost, "/app/run", run, map[string]string{"Origin": site}); w.Code != 403 {
+		t.Fatalf("сайт не должен запускать код через окно: %d", w.Code)
+	}
+	for _, bad := range []string{
+		`{"runId":"t1","language":"python","code":"","timeLimitMs":999999,"outputLimitBytes":1000}`,
+		`{"runId":"../x","language":"python","code":"","timeLimitMs":1000,"outputLimitBytes":1000}`,
+		`{"runId":"t1","language":"bash","code":"","timeLimitMs":1000,"outputLimitBytes":1000}`,
+	} {
+		if w := ideRequest(s, http.MethodPost, "/app/run", bad, self); w.Code != 400 {
+			t.Fatalf("%s принят: %d", bad, w.Code)
+		}
+	}
+	// Python не установлен: честный ответ, а не падение
+	w := ideRequest(s, http.MethodPost, "/app/run", run, self)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "env-error") {
+		t.Fatalf("запуск без Python: %d %s", w.Code, w.Body.String())
+	}
+	w = ideRequest(s, http.MethodGet, "/app/env", "", nil)
 	var env struct {
 		Python    bool
 		PythonExe string
