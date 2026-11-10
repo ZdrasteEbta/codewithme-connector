@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -115,6 +116,28 @@ func TestAppInstall(t *testing.T) {
 	w := ideRequest(s, http.MethodPost, "/app/run", run, self)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "env-error") {
 		t.Fatalf("запуск без Python: %d %s", w.Code, w.Body.String())
+	}
+	// Запуск любого файла: только из окна, только абсолютный путь и известное расширение
+	file := filepath.Join(t.TempDir(), "main.py")
+	if err := os.WriteFile(file, []byte("print(1)"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	quoted, _ := json.Marshal(file)
+	runFile := `{"runId":"f1","path":` + string(quoted) + `,"timeLimitMs":1000,"outputLimitBytes":1000}`
+	if w := ideRequest(s, http.MethodPost, "/app/run-file", runFile, map[string]string{"Origin": site}); w.Code != 403 {
+		t.Fatalf("сайт не должен запускать файлы через окно: %d", w.Code)
+	}
+	for _, bad := range []string{
+		`{"runId":"f1","path":"main.py","timeLimitMs":1000,"outputLimitBytes":1000}`,
+		`{"runId":"f1","path":` + strings.Replace(string(quoted), "main.py", "run.bat", 1) + `,"timeLimitMs":1000,"outputLimitBytes":1000}`,
+		strings.Replace(runFile, `"timeLimitMs":1000`, `"timeLimitMs":99999999`, 1),
+	} {
+		if w := ideRequest(s, http.MethodPost, "/app/run-file", bad, self); w.Code != 400 {
+			t.Fatalf("%s принят: %d", bad, w.Code)
+		}
+	}
+	if w := ideRequest(s, http.MethodPost, "/app/run-file", runFile, self); w.Code != 200 || !strings.Contains(w.Body.String(), "env-error") {
+		t.Fatalf("запуск файла без Python: %d %s", w.Code, w.Body.String())
 	}
 	w = ideRequest(s, http.MethodGet, "/app/env", "", nil)
 	var env struct {

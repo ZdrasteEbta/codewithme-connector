@@ -4,10 +4,10 @@ import os
 import sys
 
 from PyQt6.QtCore import QSettings, Qt, QTimer, QUrl
-from PyQt6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
+from PyQt6.QtGui import QAction, QDesktopServices, QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
-    QDockWidget, QMainWindow, QMessageBox, QSizePolicy, QStackedWidget, QTabWidget,
+    QDockWidget, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QStackedWidget, QTabBar, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -15,13 +15,14 @@ from assist import Assistant
 from backend import Api, StatePoller
 from editor import CodeEditor
 from icons import icon, mascot
-from panels import KeyButton, ResultPanel, Sidebar, TaskTabs, button
+from panels import DocTabs, KeyButton, ResultPanel, Sidebar, TabScroll, TaskTabs, button
 from tests import TestRunner, TestsPanel, compare_output
+from files import Explorer, language_for, read_text, run_language, same_path, write_text
 from texts import TEXTS, system_locale
 from theme import palette, stylesheet
 
 LANGUAGE_NAMES = {"python": "Python", "javascript": "JavaScript", "node": "Node.js", "dom": "JavaScript", "html": "HTML", "rust": "Rust"}
-DOCKS_VERSION = 1  # растёт, когда меняется набор панелей: старое расположение тогда забывается
+DOCKS_VERSION = 3  # растёт, когда меняется набор панелей: старое расположение тогда забывается
 
 
 class FindBar(QFrame):
@@ -267,15 +268,32 @@ class MainWindow(QMainWindow):
         fb = QHBoxLayout(file_bar)
         fb.setContentsMargins(8, 6, 18, 0)
         fb.setSpacing(10)
-        self.task_tabs = TaskTabs(self.open_task)
+        # Один ряд вкладок: задачи темы A, B, C, а за ними любые открытые файлы из проводника
+        self.task_tabs = TaskTabs(self.on_task_tab)
+        self.doc_tabs = DocTabs()
+        self.doc_tabs.addTab("")
+        self.doc_tabs.setTabData(0, None)
+        self.doc_tabs.currentChanged.connect(self.on_doc_tab)
         self.file_label = QLabel()
         self.file_label.setObjectName("fileName")
         self.saved_label = QLabel()
         self.saved_label.setObjectName("savedState")
-        fb.addWidget(self.task_tabs, 1)
+        strip = QWidget()
+        strip.setObjectName("tabStrip")
+        sl = QHBoxLayout(strip)
+        sl.setContentsMargins(0, 0, 0, 0)
+        sl.setSpacing(2)
+        sl.addWidget(self.task_tabs)
+        sl.addWidget(self.doc_tabs)
+        sl.addStretch(1)
+        # вкладок много — ряд прокручивается колёсиком, а не сжимает их до обрезков
+        self.tab_scroll = TabScroll(strip, self.task_tabs)
+        fb.addWidget(self.tab_scroll, 1)
         fb.addWidget(self.file_label)
         fb.addWidget(self.saved_label)
         tv.addWidget(file_bar)
+        self.docs = {}  # путь -> {"path", "editor", "saved"}
+        self.task_path = ""
         self.editor_stack = QStackedWidget()
         self.hint = QLabel()
         self.hint.setObjectName("emptyHint")
@@ -302,6 +320,10 @@ class MainWindow(QMainWindow):
         self.result_panel = ResultPanel(self.next_task, self.on_link)
         self.result = self.result_panel.browser
         self.sidebar_dock = self.make_dock("sidebarDock", self.sidebar)
+        self.explorer = Explorer()
+        self.explorer.open_file.connect(self.open_path)
+        self.explorer.changed_root.connect(lambda path: self.settings.setValue("explorer/root", path))
+        self.explorer_dock = self.make_dock("explorerDock", self.explorer)
         self.tests_dock = self.make_dock("testsDock", self.tests_panel)
         self.result_dock = self.make_dock("resultDock", self.result_panel)
         self.tests_wanted = None
@@ -309,9 +331,11 @@ class MainWindow(QMainWindow):
 
         self.test_results = {}
         self.local_busy = ""
+        self.file_running = ""
         self.runner = TestRunner(self.api, self)
         self.runner.step.connect(self.on_test_step)
         self.runner.result.connect(self.on_test_result)
+        self.runner.file_done.connect(self.on_file_done)
         self.runner.finished.connect(self.on_tests_finished)
 
         self.pos_label = QLabel()
@@ -396,10 +420,17 @@ class MainWindow(QMainWindow):
         return page
 
     def build_actions(self):
-        e = self.editor
+        e = lambda name: lambda: getattr(self.cur(), name)()  # команды правки — для открытой вкладки
         spec = [
+            ("file", "new_file", ["Ctrl+N"], self.new_file),
+            ("file", "open_file", ["Ctrl+O"], self.open_file_dialog),
+            ("file", "open_dir", ["Ctrl+K"], self.open_dir),
+            ("file", None, None, None),
             ("file", "save", ["Ctrl+S"], self.save_now),
-            ("file", "open_folder", ["Ctrl+Shift+E"], self.open_folder),
+            ("file", "save_as", ["Ctrl+Shift+S"], self.save_as),
+            ("file", "close_tab", ["Ctrl+W"], lambda: self.close_tab(self.doc_tabs.currentIndex())),
+            ("file", None, None, None),
+            ("file", "open_folder", [], self.open_folder),
             ("file", "open_site", ["Ctrl+Shift+O"], self.open_site),
             ("file", None, None, None),
             ("file", "exit", ["Ctrl+Q"], self.close),
@@ -412,22 +443,22 @@ class MainWindow(QMainWindow):
             ("edit", "paste", ["Ctrl+V"], lambda: self.focused("paste")),
             ("edit", "select_all", ["Ctrl+A"], lambda: self.focused("selectAll")),
             ("edit", None, None, None),
-            ("edit", "add_next", ["Ctrl+D"], e.add_next_occurrence),
-            ("edit", "select_line", ["Ctrl+L"], e.select_line),
-            ("edit", "comment", ["Ctrl+/"], e.toggle_comment),
-            ("edit", "duplicate", ["Shift+Alt+Down"], e.duplicate_line),
-            ("edit", "move_up", ["Alt+Up"], e.move_up),
-            ("edit", "move_down", ["Alt+Down"], e.move_down),
-            ("edit", "delete_line", ["Ctrl+Shift+K"], e.delete_line),
-            ("edit", "indent", ["Ctrl+]"], e.indent_lines),
-            ("edit", "outdent", ["Ctrl+["], e.outdent_lines),
+            ("edit", "add_next", ["Ctrl+D"], e("add_next_occurrence")),
+            ("edit", "select_line", ["Ctrl+L"], e("select_line")),
+            ("edit", "comment", ["Ctrl+/"], e("toggle_comment")),
+            ("edit", "duplicate", ["Shift+Alt+Down"], e("duplicate_line")),
+            ("edit", "move_up", ["Alt+Up"], e("move_up")),
+            ("edit", "move_down", ["Alt+Down"], e("move_down")),
+            ("edit", "delete_line", ["Ctrl+Shift+K"], e("delete_line")),
+            ("edit", "indent", ["Ctrl+]"], e("indent_lines")),
+            ("edit", "outdent", ["Ctrl+["], e("outdent_lines")),
             ("edit", None, None, None),
             ("edit", "find", ["Ctrl+F"], lambda: self.find_bar.open_bar(False)),
             ("edit", "replace", ["Ctrl+H"], lambda: self.find_bar.open_bar(True)),
             ("edit", "find_next", ["F3"], self.find_bar.next_match),
             ("edit", "find_prev", ["Shift+F3"], self.find_bar.prev_match),
             ("edit", "goto", ["Ctrl+G"], self.goto_line),
-            ("edit", "complete", ["Ctrl+Space"], e.show_completion),
+            ("edit", "complete", ["Ctrl+Space"], e("show_completion")),
 
             ("run_menu", "run", ["Ctrl+Return", "F5"], self.run),
             ("run_menu", "submit", ["Ctrl+Shift+Return"], self.submit),
@@ -436,8 +467,6 @@ class MainWindow(QMainWindow):
             ("run_menu", None, None, None),
             ("run_menu", "reset", [], self.reset_code),
 
-            ("view", "toggle_grid", ["Ctrl+B"], self.toggle_grid),
-            ("view", "toggle_output", ["Ctrl+J"], self.toggle_output),
             ("view", "reset_panels", [], self.place_docks),
             ("view", None, None, None),
             ("view", "zoom_in", ["Ctrl+=", "Ctrl++"], self.zoom_in),
@@ -451,6 +480,15 @@ class MainWindow(QMainWindow):
         ]
         for name in ("file", "edit", "run_menu", "view", "help"):
             self.menus[name] = self.menuBar().addMenu("")
+        # Панели в «Вид»: галочка стоит, пока панель открыта
+        for dock, name, keys in ((self.sidebar_dock, "toggle_grid", ["Ctrl+B"]),
+                                 (self.explorer_dock, "explorer", ["Ctrl+Shift+E"]), (self.tests_dock, "toggle_tests", []),
+                                 (self.result_dock, "toggle_output", ["Ctrl+J"])):
+            act = dock.toggleViewAction()
+            if keys:
+                act.setShortcuts([QKeySequence(k) for k in keys])
+                self.hotkey_rows.append((name, keys))
+            self.menus["view"].addAction(act)
         for menu, name, keys, handler in spec:
             if name is None:
                 self.menus[menu].addSeparator()
@@ -475,7 +513,12 @@ class MainWindow(QMainWindow):
         self.stop_btn.setText(t["stop"])
         self.sidebar_dock.setWindowTitle(t["toggle_grid"])
         self.tests_dock.setWindowTitle(t["tests_tab"])
-        self.result_dock.setWindowTitle(t["output"])
+        self.result_dock.setWindowTitle(t["toggle_output"])
+        self.explorer_dock.setWindowTitle(t["explorer"])
+        for dock in (self.sidebar_dock, self.explorer_dock, self.tests_dock, self.result_dock):
+            dock.titleBarWidget().setText(dock.windowTitle())
+        self.explorer.set_texts(t, palette(self.theme))
+        self.result_panel.set_texts(t)
         self.hint.setText(t["pick"])
         self.show_tests()
         self.banner_text.setText(t["site_offline"])
@@ -497,7 +540,9 @@ class MainWindow(QMainWindow):
         self.theme = "light" if name == "light" else "dark"
         c = palette(self.theme)
         QApplication.instance().setStyleSheet(stylesheet(c))
-        self.editor.apply_theme(c)
+        for editor in [self.editor] + [d["editor"] for d in self.docs.values()]:
+            editor.apply_theme(c)
+        self.explorer.set_texts(self.t, c)
         self.paint_icons(c)
         self.status_sig = None
         self.render_status()
@@ -591,6 +636,8 @@ class MainWindow(QMainWindow):
         can = ready and online and not busy
         can_run = ready and not busy and (online or self.local_tests())
         label = (task or {}).get("runLabel") or self.t["run"]
+        if self.runnable_doc():  # открыт обычный файл: «Запустить» запускает его
+            can_run, label = not busy, self.t["run_file"]
         submit = (task or {}).get("submitLabel")
         self.run_btn.setText(label)
         self.submit_btn.setText(submit or self.t["submit"])
@@ -627,6 +674,7 @@ class MainWindow(QMainWindow):
             self.title.setText(current.get("title", ""))
             self.test_results = {}
             self.load_file(fresh=True)
+            self.doc_tabs.setCurrentIndex(self.task_tab())  # новая задача — сразу её вкладка
             self.show_tests()
             if self.local_tests():
                 self.show_tests_tab()
@@ -639,20 +687,25 @@ class MainWindow(QMainWindow):
         code, data = self.api.file(self.key)
         if code != 200:
             self.file_ready = False
-            self.editor_stack.setCurrentWidget(self.hint)
+            self.show_task_view()
             return
         self.base = data.get("version", "0")
         self.task_folder = data.get("folder")
-        self.file_label.setText(os.path.basename(data.get("file", "")))
+        name = data.get("file", "")
+        self.task_path = name if os.path.isabs(name) else os.path.join(self.task_folder or "", name)
+        self.file_label.setText(os.path.basename(name))
+        self.doc_tabs.setTabText(self.task_tab(), os.path.basename(name))
+        if not self.explorer.root:
+            self.explorer.set_root(self.settings.value("explorer/root") or self.state.get("folder") or self.task_folder or "")
         self.language_label.setText(LANGUAGE_NAMES.get(self.task.get("language"), ""))
         self.editor.set_language(self.task.get("language", "python"))
         self.editor.locked = bool(self.task.get("locked"))
         self.editor.load(data.get("content", ""), fresh)
         self.dirty = False
         self.file_ready = True
-        self.editor_stack.setCurrentWidget(self.editor)
+        self.show_task_view()
         self.assist.task_changed(self.task.get("language", "python"), self.task_folder, self.state.get("folder"))
-        if fresh:
+        if fresh and self.cur() is self.editor:
             self.editor.setFocus()
 
     def on_edited(self):
@@ -673,6 +726,10 @@ class MainWindow(QMainWindow):
         return True
 
     def save_now(self):
+        doc = self.cur_doc()
+        if doc:
+            self.save_doc(doc)
+            return
         self.save_timer.stop()
         self.flush()
         self.saved_label.setText(self.t["saved"])
@@ -706,6 +763,10 @@ class MainWindow(QMainWindow):
 
     def run(self):
         if not self.run_btn.isEnabled():
+            return
+        doc = self.runnable_doc()
+        if doc:
+            self.run_file(doc)
             return
         self.show_output()
         if self.local_tests():
@@ -859,6 +920,8 @@ class MainWindow(QMainWindow):
                           int(task.get("timeLimitMs") or 2000), self.t)
 
     def on_test_step(self, text: str):
+        if self.runner.running and text != self.local_busy and not text.startswith(self.t["test_running"].split("{")[0]):
+            self.result_panel.log(text, c=palette(self.theme))
         if self.runner.running:
             self.local_busy = text
             self.busy.setText(text)
@@ -880,11 +943,18 @@ class MainWindow(QMainWindow):
             verdict = {"re": "RE", "tle": "TLE", "ce": "CE", "ole": "OLE"}.get(status, "!")
             title = self.t.get(f"test_{status}", self.t["run_failed"])
         self.test_results[index] = (verdict, title, res)
+        head = " · ".join(x for x in (self.t["log_test"].format(n=index + 1), title or verdict,
+                                       self.t["time_ms"].format(ms=res.get("timeMs", 0)) if "timeMs" in res else "") if x)
+        self.result_panel.log(head, res.get("stdout") or "", "\n".join(x for x in (res.get("stderr"), res.get("error")) if x),
+                              palette(self.theme))
         if index < len(self.tests_panel.cards):
             self.tests_panel.cards[index].set_result(verdict, title, res)
 
     def on_tests_finished(self):
         self.local_busy = ""
+        if self.runner.mode == "file":
+            self.update_controls()
+            return
         results = list(self.test_results.values())
         passed = sum(1 for v, _, _ in results if v == "OK")
         checked = sum(1 for v, _, _ in results if v)
@@ -897,6 +967,33 @@ class MainWindow(QMainWindow):
             self.show_result_tab()
             self.send("submit")
 
+    def runnable_doc(self):
+        doc = self.cur_doc() if hasattr(self, "doc_tabs") else None
+        return doc if doc and run_language(doc["path"]) else None
+
+    def run_file(self, doc):
+        """Сохраняет файл и запускает его в его папке, как в обычной IDE."""
+        if self.runner.running or not self.save_doc(doc):
+            return
+        self.show_result_tab()
+        name = os.path.basename(doc["path"])
+        self.file_running = name
+        self.result_panel.log(self.t["log_run_file"].format(name=name), c=palette(self.theme))
+        self.local_busy = self.t["running"]
+        self.update_controls()
+        self.runner.start_file(doc["path"], run_language(doc["path"]), self.result_panel.stdin.toPlainText(), self.t)
+
+    def on_file_done(self, res: dict):
+        status = res.get("status", "")
+        title = {"ok": self.t["file_done"], "re": self.t["file_exit"], "tle": self.t["test_tle"], "ce": self.t["test_ce"],
+                 "ole": self.t["test_ole"], "cancelled": self.t["file_stopped"]}.get(status, self.t["run_failed"])
+        parts = [self.file_running, title]
+        if "timeMs" in res and status != "ce":
+            parts.append(self.t["time_ms"].format(ms=res["timeMs"]))
+        error = "\n".join(x for x in (res.get("stderr"), res.get("error")) if x)
+        self.result_panel.log(" · ".join(p for p in parts if p), res.get("stdout") or "", error, palette(self.theme))
+        self.run_time.setText(title)
+
     def stop(self):
         if self.runner.running:
             self.runner.stop()
@@ -906,6 +1003,12 @@ class MainWindow(QMainWindow):
     def next_task(self):
         if (self.status or {}).get("next"):
             self.send("next")
+
+    def on_task_tab(self, href: str, key):
+        """Вкладка задачи: показывает её код; другая задача ещё и открывается на сайте."""
+        self.doc_tabs.setCurrentIndex(self.task_tab())
+        if key != self.key:
+            self.open_task(href)
 
     def open_task(self, href: str):
         self.flush()
@@ -944,17 +1047,23 @@ class MainWindow(QMainWindow):
         d.setInputMode(QInputDialog.InputMode.IntInput)
         d.setWindowTitle(self.t["goto"])
         d.setLabelText(self.t["goto_prompt"])
-        d.setIntRange(1, max(1, self.editor.lines()))
-        d.setIntValue(self.editor.getCursorPosition()[0] + 1)
+        editor = self.cur()
+        d.setIntRange(1, max(1, editor.lines()))
+        d.setIntValue(editor.getCursorPosition()[0] + 1)
         d.setOkButtonText(self.t["ok"])
         d.setCancelButtonText(self.t["cancel"])
         if d.exec():
-            self.editor.go_to_line(d.intValue() - 1)
+            editor.go_to_line(d.intValue() - 1)
 
     def make_dock(self, name: str, widget) -> QDockWidget:
         dock = QDockWidget(self.work)
         dock.setObjectName(name)
         dock.setWidget(widget)
+        # Свой заголовок без серых кнопок «открепить» и «закрыть»: за него панель перетаскивают,
+        # а открыть и закрыть её можно в меню «Вид»
+        title = QLabel()
+        title.setObjectName("dockTitle")
+        dock.setTitleBarWidget(title)
         dock.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetMovable | QDockWidget.DockWidgetFeature.DockWidgetFloatable
             | QDockWidget.DockWidgetFeature.DockWidgetClosable
@@ -962,26 +1071,22 @@ class MainWindow(QMainWindow):
         return dock
 
     def place_docks(self):
-        """Расположение по умолчанию: курсы слева, тесты и результат вкладками справа."""
+        """Расположение по умолчанию: курсы слева, справа тесты и под ними Debug."""
         work, left, right = self.work, Qt.DockWidgetArea.LeftDockWidgetArea, Qt.DockWidgetArea.RightDockWidgetArea
-        for dock, area in ((self.sidebar_dock, left), (self.tests_dock, right), (self.result_dock, right)):
+        for dock, area in ((self.sidebar_dock, left), (self.explorer_dock, left), (self.tests_dock, right),
+                           (self.result_dock, right)):
             dock.setFloating(False)
             work.addDockWidget(area, dock)
             dock.show()
-        work.tabifyDockWidget(self.tests_dock, self.result_dock)
+        work.tabifyDockWidget(self.sidebar_dock, self.explorer_dock)
+        self.sidebar_dock.raise_()
+        work.splitDockWidget(self.tests_dock, self.result_dock, Qt.Orientation.Vertical)
         work.resizeDocks([self.sidebar_dock, self.tests_dock], [230, 420], Qt.Orientation.Horizontal)
+        work.resizeDocks([self.tests_dock, self.result_dock], [500, 260], Qt.Orientation.Vertical)
         self.tests_wanted = None
         if hasattr(self, "runner"):  # при первой сборке окна кнопок ещё нет
             self.update_controls()
         (self.tests_dock if self.local_tests() else self.result_dock).raise_()
-
-    def toggle_grid(self):
-        self.sidebar_dock.setVisible(not self.sidebar_dock.isVisible())
-
-    def toggle_output(self):
-        shown = self.tests_dock.isVisible() or self.result_dock.isVisible()
-        self.result_dock.setVisible(not shown)
-        self.tests_dock.setVisible(not shown and self.local_tests())
 
     def show_output(self):
         self.show_result_tab()
@@ -995,13 +1100,181 @@ class MainWindow(QMainWindow):
         self.tests_dock.raise_()
 
     def zoom_in(self):
-        self.editor.zoomIn(1)
+        self.cur().zoomIn(1)
 
     def zoom_out(self):
-        self.editor.zoomOut(1)
+        self.cur().zoomOut(1)
 
     def zoom_reset(self):
-        self.editor.set_zoom(0)
+        self.cur().set_zoom(0)
+
+    # --- файлы и вкладки, как в обычной IDE ---
+
+    def cur(self):
+        """Редактор открытой вкладки (файл задачи или любой другой файл)."""
+        doc = self.cur_doc()
+        return doc["editor"] if doc else self.editor
+
+    def cur_doc(self):
+        path = self.doc_tabs.tabData(self.doc_tabs.currentIndex())
+        return self.docs.get(path) if path else None
+
+    def task_tab(self) -> int:
+        return next(i for i in range(self.doc_tabs.count()) if self.doc_tabs.tabData(i) is None)
+
+    def doc_index(self, key: str) -> int:
+        return next((i for i in range(self.doc_tabs.count()) if self.doc_tabs.tabData(i) == key), -1)
+
+    def show_task_view(self):
+        if self.cur_doc() is None:
+            self.editor_stack.setCurrentWidget(self.editor if self.file_ready else self.hint)
+
+    def doc_key(self, path: str) -> str:
+        return os.path.normcase(os.path.abspath(path))
+
+    def open_path(self, path: str):
+        if same_path(path, self.task_path):
+            self.doc_tabs.setCurrentIndex(self.task_tab())
+            return
+        key = self.doc_key(path)
+        if key in self.docs:
+            self.select_doc(key)
+            return
+        text, error = read_text(path)
+        if text is None:
+            message = {"big": self.t["file_big"], "binary": self.t["file_binary"]}.get(error, error)
+            QMessageBox.warning(self, self.t["cannot_open"], f"{os.path.basename(path)}\n\n{message}")
+            return
+        editor = CodeEditor()
+        editor.apply_theme(palette(self.theme))
+        editor.set_language(language_for(path))
+        editor.load(text, True)
+        editor.set_zoom(self.editor.get_zoom())
+        doc = {"path": path, "editor": editor, "saved": text}
+        editor.edited.connect(lambda: self.mark_doc(doc))
+        editor.position_changed.connect(self.show_position)
+        self.docs[key] = doc
+        self.editor_stack.addWidget(editor)
+        i = self.doc_tabs.addTab(os.path.basename(path))
+        self.doc_tabs.setTabData(i, key)
+        self.doc_tabs.setTabToolTip(i, path)
+        close = button(kind="tabClose")
+        close.setIcon(QIcon(icon("close", palette(self.theme)["mute"], 10)))
+        close.setFixedSize(18, 18)
+        close.setToolTip(self.t["close_tab"])
+        close.clicked.connect(lambda _=False, k=key: self.close_tab(self.doc_index(k)))
+        self.doc_tabs.setTabButton(i, QTabBar.ButtonPosition.RightSide, close)
+        self.doc_tabs.setCurrentIndex(i)
+        editor.setFocus()
+
+    def select_doc(self, key: str):
+        if self.doc_index(key) >= 0:
+            self.doc_tabs.setCurrentIndex(self.doc_index(key))
+
+    def mark_doc(self, doc):
+        dirty = doc["editor"].text() != doc["saved"]
+        key = self.doc_key(doc["path"])
+        for i in range(self.doc_tabs.count()):
+            if self.doc_tabs.tabData(i) == key:
+                self.doc_tabs.setTabText(i, ("● " if dirty else "") + os.path.basename(doc["path"]))
+
+    def on_doc_tab(self, index: int):
+        doc = self.cur_doc()
+        editor = doc["editor"] if doc else None
+        if editor:
+            self.editor_stack.setCurrentWidget(editor)
+            self.language_label.setText({"text": ""}.get(editor.language, LANGUAGE_NAMES.get(editor.language, "")))
+        else:
+            self.show_task_view()
+            self.language_label.setText(LANGUAGE_NAMES.get((self.task or {}).get("language"), ""))
+        self.task_tabs.set_active(doc is None)
+        self.file_label.setVisible(doc is None)  # имя файла задачи — только когда открыта задача
+        QTimer.singleShot(0, self.tab_scroll.show_active)
+        self.find_bar.editor = self.cur()
+        line, col = self.cur().getCursorPosition()
+        self.show_position(line, col)
+        self.update_controls()
+
+    def save_doc(self, doc) -> bool:
+        text = doc["editor"].text()
+        error = write_text(doc["path"], text)
+        if error:
+            QMessageBox.warning(self, self.t["cannot_save"], f"{doc['path']}\n\n{error}")
+            return False
+        doc["saved"] = text
+        self.mark_doc(doc)
+        return True
+
+    def ask_save(self, names: list):
+        """True — сохранить, False — не сохранять, None — отмена."""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(self.t["save"])
+        text = self.t["unsaved_text"].format(name=names[0]) if len(names) == 1 else self.t["unsaved_many"].format(names=", ".join(names))
+        box.setText(text)
+        save = box.addButton(self.t["save"], QMessageBox.ButtonRole.AcceptRole)
+        skip = box.addButton(self.t["dont_save"], QMessageBox.ButtonRole.DestructiveRole)
+        box.addButton(self.t["cancel"], QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        return True if box.clickedButton() is save else False if box.clickedButton() is skip else None
+
+    def close_tab(self, index: int):
+        key = self.doc_tabs.tabData(index)
+        doc = self.docs.get(key) if key else None
+        if not doc:
+            return
+        if doc["editor"].text() != doc["saved"]:
+            answer = self.ask_save([os.path.basename(doc["path"])])
+            if answer is None or (answer and not self.save_doc(doc)):
+                return
+        self.doc_tabs.removeTab(index)
+        self.editor_stack.removeWidget(doc["editor"])
+        doc["editor"].deleteLater()
+        del self.docs[key]
+        self.on_doc_tab(self.doc_tabs.currentIndex())
+
+    def start_dir(self) -> str:
+        return self.explorer.root or self.task_folder or os.path.expanduser("~")
+
+    def open_file_dialog(self):
+        path, _ = QFileDialog.getOpenFileName(self, self.t["open_file"], self.start_dir())
+        if path:
+            self.open_path(path)
+
+    def open_dir(self):
+        self.explorer.choose_root()
+        self.explorer_dock.show()
+        self.explorer_dock.raise_()
+
+    def new_file(self):
+        path, _ = QFileDialog.getSaveFileName(self, self.t["new_file"], self.start_dir())
+        if not path:
+            return
+        if not os.path.exists(path):
+            error = write_text(path, "")
+            if error:
+                QMessageBox.warning(self, self.t["cannot_save"], f"{path}\n\n{error}")
+                return
+        self.open_path(path)
+
+    def save_as(self):
+        start = self.cur_doc()["path"] if self.cur_doc() else os.path.join(self.start_dir(), self.file_label.text())
+        path, _ = QFileDialog.getSaveFileName(self, self.t["save_as"], start)
+        if not path:
+            return
+        error = write_text(path, self.cur().text())
+        if error:
+            QMessageBox.warning(self, self.t["cannot_save"], f"{path}\n\n{error}")
+            return
+        doc = self.cur_doc()
+        if doc and same_path(path, doc["path"]):
+            doc["saved"] = doc["editor"].text()
+            self.mark_doc(doc)
+            return
+        self.open_path(path)
+
+    def unsaved_docs(self) -> list:
+        return [d for d in self.docs.values() if d["editor"].text() != d["saved"]]
 
     def on_link(self, url: QUrl):
         text = url.toString()
@@ -1025,6 +1298,12 @@ class MainWindow(QMainWindow):
         had_result = self.status_sig is not None
         self.status_sig = sig
         self.run_time.setText(self.result_panel.show_status(s, self.t, palette(self.theme)))
+        run = (s or {}).get("run")
+        if run and not (s or {}).get("busy"):
+            title = " · ".join(x for x in (self.t["log_site_run"], run.get("label"), run.get("time")) if x)
+            self.result_panel.log(title, run.get("stdout") or "", run.get("stderr") or "", palette(self.theme))
+        elif (s or {}).get("error"):
+            self.result_panel.log((s.get("result") or {}).get("title") or self.t["stderr"], "", s["error"], palette(self.theme))
         if had_result and s and (s.get("result") or s.get("run") or s.get("tests")):
             self.show_output()
             self.show_result_tab()
@@ -1082,6 +1361,12 @@ class MainWindow(QMainWindow):
         self.activateWindow()
 
     def closeEvent(self, event):
+        unsaved = self.unsaved_docs()
+        if unsaved:
+            answer = self.ask_save([os.path.basename(d["path"]) for d in unsaved])
+            if answer is None or (answer and not all(self.save_doc(d) for d in unsaved)):
+                event.ignore()
+                return
         self.save_timer.stop()
         self.flush()
         self.assist.close()

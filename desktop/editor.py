@@ -246,6 +246,17 @@ class CodeEditor(QsciScintilla):
     def _install_lexer(self) -> None:
         if not self.colors:
             return
+        if self.language == "text":  # txt, md, csv: без подсветки
+            old, self._lexer, self._apis = self._lexer, None, None
+            self.setLexer(None)
+            font = QFont(code_family(), 11)
+            font.setStyleHint(QFont.StyleHint.Monospace)
+            self.setFont(font)
+            self.setPaper(QColor(self.colors["code"]))
+            self.setColor(QColor(self.colors["fg"]))
+            if old is not None:
+                old.deleteLater()
+            return
         family = self._family()
         lexer = {"python": QsciLexerPython, "rust": QsciLexerCPP, "html": QsciLexerHTML, "js": QsciLexerJavaScript}[family](self)
         c = self.colors

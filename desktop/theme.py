@@ -155,6 +155,9 @@ QFrame#topicItem[state="current"] {{ background: {tint(c['done'], 0.18)}; }}
 QPushButton#taskTab {{ min-height: 30px; padding: 0 16px; border: 1px solid transparent; border-bottom: 0; border-top-left-radius: 8px; border-top-right-radius: 8px; border-bottom-left-radius: 0; border-bottom-right-radius: 0; background: transparent; color: {c['mute']}; font-size: 13px; font-weight: 600; text-align: left; }}
 QPushButton#taskTab:hover {{ color: {c['fg']}; background: {tint(c['fg'], 0.04)}; }}
 QPushButton#taskTab[active="true"] {{ color: {c['fg']}; background: {c['code']}; border-color: {c['line2']}; font-weight: 700; }}
+QScrollArea#tabScroll, QWidget#tabStrip {{ background: transparent; border: 0; }}
+QPushButton#taskTab[file="true"] {{ padding: 0 30px 0 14px; font-weight: 500; }}
+QPushButton#taskTab[file="true"][active="true"] {{ font-weight: 500; }}
 QPushButton[kind="soft"] {{ background: {c['raise']}; color: {c['fg']}; border: 1px solid {c['line2']}; border-radius: 7px; padding: 5px 12px; font-size: 12px; font-weight: 700; }}
 QPushButton[kind="soft"]:hover {{ border-color: {c['line3']}; background: {c['panel2']}; }}
 QPushButton[kind="soft"]:disabled {{ color: {c['faint']}; background: transparent; border-color: {c['line']}; }}
@@ -176,8 +179,23 @@ QMainWindow#work::separator {{ background: {c['line']}; width: 1px; height: 1px;
 QMainWindow#work::separator:hover {{ background: {c['line3']}; }}
 QDockWidget {{ color: {c['mute']}; font-size: 11px; font-weight: 700; }}
 QDockWidget::title {{ background: {c['deep']}; padding: 7px 10px; border-bottom: 1px solid {c['line']}; text-align: left; }}
-QDockWidget::close-button, QDockWidget::float-button {{ background: transparent; border: 0; border-radius: 4px; padding: 2px; }}
-QDockWidget::close-button:hover, QDockWidget::float-button:hover {{ background: {c['raise']}; }}
+#dockTitle {{ background: {c['deep']}; color: {c['mute']}; font-size: 11px; font-weight: 700; padding: 7px 12px; border-bottom: 1px solid {c['line']}; }}
+QTabBar#docTabs {{ background: {c['code']}; border: 0; border-bottom: 1px solid {c['line']}; }}
+QTabBar#docTabs::tab {{ background: transparent; color: {c['mute']}; padding: 6px 8px 6px 14px; border: 0; border-right: 1px solid {c['line']}; border-top: 2px solid transparent; font-size: 12px; min-width: 60px; }}
+QTabBar#docTabs::tab:hover {{ color: {c['fg']}; }}
+QTabBar#docTabs::tab:selected {{ color: {c['fg']}; background: {c['panel2']}; border-top-color: {c['lime']}; }}
+QPushButton[kind="tabClose"] {{ background: transparent; border: 0; border-radius: 4px; padding: 0; margin-left: 4px; }}
+QPushButton[kind="tabClose"]:hover {{ background: {c['raise']}; }}
+#explorer, #explorerBar {{ background: {c['deep']}; }}
+#explorerRoot {{ color: {c['mute']}; font-size: 11px; font-weight: 700; }}
+QTreeView#explorerTree {{ background: {c['deep']}; color: {c['fg2']}; border: 0; outline: 0; font-size: 13px; }}
+QTreeView#explorerTree::item {{ padding: 3px 2px; border-radius: 5px; }}
+QTreeView#explorerTree::item:hover {{ background: {c['panel']}; }}
+QTreeView#explorerTree::item:selected {{ background: {tint(c['done'], 0.18)}; color: {c['fg']}; }}
+#logBar {{ background: {c['deep']}; border-top: 1px solid {c['line']}; border-bottom: 1px solid {c['line']}; }}
+QPlainTextEdit#stdinBox {{ background: {c['code']}; border: 0; border-bottom: 1px solid {c['line']}; border-radius: 0; color: {c['fg']}; font-size: 12px; padding: 4px 10px; }}
+#logTitle {{ color: {c['mute']}; font-size: 11px; font-weight: 700; }}
+QPlainTextEdit#logBox {{ background: {c['code']}; border: 0; border-radius: 0; color: {c['fg2']}; font-size: 12px; padding: 6px 10px; }}
 QMainWindow#work QTabBar {{ background: {c['deep']}; }}
 QMainWindow#work QTabBar::tab {{ background: transparent; color: {c['mute']}; padding: 7px 16px; border: 1px solid transparent; border-bottom: 0; border-top-left-radius: 8px; border-top-right-radius: 8px; margin-top: 4px; }}
 QMainWindow#work QTabBar::tab:hover {{ color: {c['fg']}; }}
