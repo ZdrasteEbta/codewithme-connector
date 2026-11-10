@@ -139,6 +139,14 @@ func TestAppInstall(t *testing.T) {
 	if w := ideRequest(s, http.MethodPost, "/app/run-file", runFile, self); w.Code != 200 || !strings.Contains(w.Body.String(), "env-error") {
 		t.Fatalf("запуск файла без Python: %d %s", w.Code, w.Body.String())
 	}
+	// Ввод для интерактивного запуска: тоже только из окна; неизвестный запуск — known:false
+	if w := ideRequest(s, http.MethodPost, "/app/run-io", `{"runId":"f1","input":"1
+"}`, map[string]string{"Origin": site}); w.Code != 403 {
+		t.Fatalf("сайт не должен писать в ввод программы: %d", w.Code)
+	}
+	if w := ideRequest(s, http.MethodPost, "/app/run-io", `{"runId":"nope"}`, self); w.Code != 200 || !strings.Contains(w.Body.String(), `"known":false`) {
+		t.Fatalf("неизвестный запуск: %d %s", w.Code, w.Body.String())
+	}
 	w = ideRequest(s, http.MethodGet, "/app/env", "", nil)
 	var env struct {
 		Python    bool
@@ -179,5 +187,17 @@ func TestCommandReachesSite(t *testing.T) {
 	}
 	if res.Cmd.Type != "run" || res.Cmd.Key != "k" || res.Cmd.Stdin != "5" {
 		t.Fatalf("сайт получил: %+v", res.Cmd)
+	}
+}
+
+func TestTailKeepsSplitLetters(t *testing.T) {
+	buf := []byte("да")
+	text, pos := tail(buf[:3], 0) // «д» целиком и половина «а»
+	if text != "д" || pos != 2 {
+		t.Fatalf("got %q %d", text, pos)
+	}
+	text, pos = tail(buf, pos)
+	if text != "а" || pos != 4 {
+		t.Fatalf("got %q %d", text, pos)
 	}
 }

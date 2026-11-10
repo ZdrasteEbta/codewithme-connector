@@ -7,7 +7,7 @@ from PyQt6.QtCore import QSettings, Qt, QTimer, QUrl
 from PyQt6.QtGui import QAction, QDesktopServices, QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
-    QDockWidget, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QStackedWidget, QTabBar, QTabWidget,
+    QDockWidget, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QSplitter, QStackedWidget, QTabBar, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -22,7 +22,7 @@ from texts import TEXTS, system_locale
 from theme import palette, stylesheet
 
 LANGUAGE_NAMES = {"python": "Python", "javascript": "JavaScript", "node": "Node.js", "dom": "JavaScript", "html": "HTML", "rust": "Rust"}
-DOCKS_VERSION = 3  # растёт, когда меняется набор панелей: старое расположение тогда забывается
+DOCKS_VERSION = 4  # не повышать: так пропадает раскладка ученика; панели, которых больше нет, Qt сам пропускает
 
 
 class FindBar(QFrame):
@@ -188,7 +188,14 @@ class MainWindow(QMainWindow):
         self.set_theme(self.theme, remember=False)
         self.retitle()
         self.restore_layout()
+        self.keep_file_tab = False
+        self.restore_session()
         self.update_controls()
+        # Раскладку и открытые файлы сохраняем на ходу, а не только при закрытии окна:
+        # так они не пропадут, если окно закрыли не крестиком (выключили компьютер и т. п.)
+        self.layout_saved = None
+        self.layout_timer = QTimer(self, interval=2000, timeout=self.save_layout)
+        self.layout_timer.start()
 
         self.poller = StatePoller(api, self)
         self.poller.changed.connect(self.apply_state)
@@ -324,8 +331,20 @@ class MainWindow(QMainWindow):
         self.explorer.open_file.connect(self.open_path)
         self.explorer.changed_root.connect(lambda path: self.settings.setValue("explorer/root", path))
         self.explorer_dock = self.make_dock("explorerDock", self.explorer)
-        self.tests_dock = self.make_dock("testsDock", self.tests_panel)
-        self.result_dock = self.make_dock("resultDock", self.result_panel)
+        # Справа одна панель: сверху вывод запущенного файла (только когда он нужен), под ним тесты.
+        # Отдельной панели Debug больше нет
+        right = QSplitter(Qt.Orientation.Vertical)
+        right.setHandleWidth(1)
+        right.setChildrenCollapsible(False)
+        self.console = self.result_panel.console
+        self.console.setParent(right)
+        right.addWidget(self.console)
+        right.addWidget(self.tests_panel)
+        right.setSizes([260, 500])
+        self.right_split = right
+        self.console.hide()
+        self.result_panel.log_hide.clicked.connect(self.hide_console)
+        self.tests_dock = self.make_dock("testsDock", right)
         self.tests_wanted = None
         self.place_docks()
 
@@ -336,6 +355,9 @@ class MainWindow(QMainWindow):
         self.runner.step.connect(self.on_test_step)
         self.runner.result.connect(self.on_test_result)
         self.runner.file_done.connect(self.on_file_done)
+        self.runner.live.connect(self.on_file_output)
+        self.result_panel.stdin.submitted.connect(self.on_file_input)
+        self.result_panel.stdin.eof.connect(lambda: self.runner.send_input(eof=True))
         self.runner.finished.connect(self.on_tests_finished)
 
         self.pos_label = QLabel()
@@ -482,8 +504,7 @@ class MainWindow(QMainWindow):
             self.menus[name] = self.menuBar().addMenu("")
         # Панели в «Вид»: галочка стоит, пока панель открыта
         for dock, name, keys in ((self.sidebar_dock, "toggle_grid", ["Ctrl+B"]),
-                                 (self.explorer_dock, "explorer", ["Ctrl+Shift+E"]), (self.tests_dock, "toggle_tests", []),
-                                 (self.result_dock, "toggle_output", ["Ctrl+J"])):
+                                 (self.explorer_dock, "explorer", ["Ctrl+Shift+E"]), (self.tests_dock, "toggle_tests", [])):
             act = dock.toggleViewAction()
             if keys:
                 act.setShortcuts([QKeySequence(k) for k in keys])
@@ -513,9 +534,8 @@ class MainWindow(QMainWindow):
         self.stop_btn.setText(t["stop"])
         self.sidebar_dock.setWindowTitle(t["toggle_grid"])
         self.tests_dock.setWindowTitle(t["tests_tab"])
-        self.result_dock.setWindowTitle(t["toggle_output"])
         self.explorer_dock.setWindowTitle(t["explorer"])
-        for dock in (self.sidebar_dock, self.explorer_dock, self.tests_dock, self.result_dock):
+        for dock in (self.sidebar_dock, self.explorer_dock, self.tests_dock):
             dock.titleBarWidget().setText(dock.windowTitle())
         self.explorer.set_texts(t, palette(self.theme))
         self.result_panel.set_texts(t)
@@ -652,11 +672,12 @@ class MainWindow(QMainWindow):
         self.acts["reset"].setEnabled(ready and not busy)
         self.acts["next"].setEnabled(bool((self.status or {}).get("next")) and online)
         has_tests = self.local_tests()
-        if has_tests != self.tests_wanted:  # прячем тесты только при смене задачи, а не после закрытия руками
+        if self.tests_wanted is None or not self.task:  # при запуске оставляем панели, как их расставили
+            self.tests_wanted = has_tests if self.task else None
+        elif has_tests != self.tests_wanted:  # прячем тесты только при смене задачи, а не после закрытия руками
             self.tests_wanted = has_tests
-            self.tests_dock.setVisible(has_tests)
-            if not has_tests:
-                self.show_result_tab()
+            self.tests_panel.setVisible(has_tests or not self.console.isVisible())
+            self.tests_dock.setVisible(has_tests or self.console.isVisible())
         self.stop_btn.setToolTip("Shift+F5")
         self.busy.setText(self.busy_text())
 
@@ -674,7 +695,10 @@ class MainWindow(QMainWindow):
             self.title.setText(current.get("title", ""))
             self.test_results = {}
             self.load_file(fresh=True)
-            self.doc_tabs.setCurrentIndex(self.task_tab())  # новая задача — сразу её вкладка
+            if self.keep_file_tab:  # первая задача после запуска: остаёмся на файле, открытом в прошлый раз
+                self.keep_file_tab = False
+            else:
+                self.doc_tabs.setCurrentIndex(self.task_tab())  # новая задача — сразу её вкладка
             self.show_tests()
             if self.local_tests():
                 self.show_tests_tab()
@@ -977,13 +1001,38 @@ class MainWindow(QMainWindow):
             return
         self.show_result_tab()
         name = os.path.basename(doc["path"])
+        self.show_console()
         self.file_running = name
         self.result_panel.log(self.t["log_run_file"].format(name=name), c=palette(self.theme))
         self.local_busy = self.t["running"]
         self.update_controls()
-        self.runner.start_file(doc["path"], run_language(doc["path"]), self.result_panel.stdin.toPlainText(), self.t)
+        panel = self.result_panel
+        stdin = panel.stdin.toPlainText()
+        if stdin and not stdin.endswith("\n"):
+            stdin += "\n"
+        panel.stdin.clear()
+        panel.set_live(True)
+        panel.write(stdin, palette(self.theme)["lime"])  # заранее написанный ввод виден в журнале, как набранный
+        panel.stdin.setFocus()
+        self.runner.start_file(doc["path"], run_language(doc["path"]), stdin, self.t)
+
+    def on_file_output(self, out: str, err: str):
+        c = palette(self.theme)
+        self.result_panel.write(out)
+        self.result_panel.write(err, c["rose"])
+
+    def on_file_input(self, text: str):
+        """Enter в строке ввода: текст уходит программе и остаётся в журнале, как в терминале."""
+        if not (self.runner.running and self.runner.mode == "file"):
+            return
+        self.result_panel.write(text + "\n", palette(self.theme)["lime"])
+        self.runner.send_input(text + "\n")
 
     def on_file_done(self, res: dict):
+        panel = self.result_panel
+        panel.set_live(False)
+        if panel.stdin.hasFocus():
+            self.cur().setFocus()
         status = res.get("status", "")
         title = {"ok": self.t["file_done"], "re": self.t["file_exit"], "tle": self.t["test_tle"], "ce": self.t["test_ce"],
                  "ole": self.t["test_ole"], "cancelled": self.t["file_stopped"]}.get(status, self.t["run_failed"])
@@ -1073,27 +1122,36 @@ class MainWindow(QMainWindow):
     def place_docks(self):
         """Расположение по умолчанию: курсы слева, справа тесты и под ними Debug."""
         work, left, right = self.work, Qt.DockWidgetArea.LeftDockWidgetArea, Qt.DockWidgetArea.RightDockWidgetArea
-        for dock, area in ((self.sidebar_dock, left), (self.explorer_dock, left), (self.tests_dock, right),
-                           (self.result_dock, right)):
+        for dock, area in ((self.sidebar_dock, left), (self.explorer_dock, left), (self.tests_dock, right)):
             dock.setFloating(False)
             work.addDockWidget(area, dock)
             dock.show()
         work.tabifyDockWidget(self.sidebar_dock, self.explorer_dock)
         self.sidebar_dock.raise_()
-        work.splitDockWidget(self.tests_dock, self.result_dock, Qt.Orientation.Vertical)
         work.resizeDocks([self.sidebar_dock, self.tests_dock], [230, 420], Qt.Orientation.Horizontal)
-        work.resizeDocks([self.tests_dock, self.result_dock], [500, 260], Qt.Orientation.Vertical)
         self.tests_wanted = None
         if hasattr(self, "runner"):  # при первой сборке окна кнопок ещё нет
             self.update_controls()
-        (self.tests_dock if self.local_tests() else self.result_dock).raise_()
+        self.tests_dock.raise_()
 
     def show_output(self):
-        self.show_result_tab()
+        pass  # результат отправки виден в строке под редактором
 
     def show_result_tab(self):
-        self.result_dock.show()
-        self.result_dock.raise_()
+        pass
+
+    def show_console(self):
+        """Вывод программы над тестами: появляется при запуске файла или выводе с сайта."""
+        self.console.show()
+        self.tests_panel.setVisible(self.local_tests())
+        self.tests_dock.show()
+        self.tests_dock.raise_()
+
+    def hide_console(self):
+        self.console.hide()
+        self.tests_panel.show()
+        if not self.local_tests():
+            self.tests_dock.hide()
 
     def show_tests_tab(self):
         self.tests_dock.show()
@@ -1304,9 +1362,8 @@ class MainWindow(QMainWindow):
             self.result_panel.log(title, run.get("stdout") or "", run.get("stderr") or "", palette(self.theme))
         elif (s or {}).get("error"):
             self.result_panel.log((s.get("result") or {}).get("title") or self.t["stderr"], "", s["error"], palette(self.theme))
-        if had_result and s and (s.get("result") or s.get("run") or s.get("tests")):
-            self.show_output()
-            self.show_result_tab()
+        if had_result and s and (s.get("run") or s.get("error")) and not s.get("busy"):
+            self.show_console()
 
     # --- справка ---
 
@@ -1353,6 +1410,45 @@ class MainWindow(QMainWindow):
         zoom = s.value("zoom")
         if zoom is not None:
             self.editor.set_zoom(int(zoom))
+        value = s.value("right_split")
+        if value is not None:
+            self.right_split.restoreState(value)
+
+    def save_layout(self):
+        """Положение окна, панелей, размеры и открытые файлы; пишет только когда что-то изменилось."""
+        s = self.settings
+        layout = (bytes(self.saveGeometry()), bytes(self.work.saveState(DOCKS_VERSION)),
+                  bytes(self.right_split.saveState()), self.editor.get_zoom(), json.dumps(self.session()))
+        if layout == self.layout_saved:
+            return
+        self.layout_saved = layout
+        s.setValue("geometry", self.saveGeometry())
+        s.setValue("docks", self.work.saveState(DOCKS_VERSION))
+        s.setValue("right_split", self.right_split.saveState())
+        s.setValue("zoom", self.editor.get_zoom())
+        s.setValue("session", json.dumps(self.session(), ensure_ascii=False))
+
+    def session(self) -> dict:
+        files = [self.docs[k]["path"] for k in (self.doc_tabs.tabData(i) for i in range(self.doc_tabs.count()))
+                 if k and k in self.docs]
+        doc = self.cur_doc()
+        return {"files": files, "current": doc["path"] if doc else ""}
+
+    def restore_session(self):
+        """Снова открывает файлы, которые были открыты в прошлый раз (кроме удалённых)."""
+        try:
+            data = json.loads(self.settings.value("session") or "{}")
+        except ValueError:
+            return
+        for path in data.get("files") or []:
+            if isinstance(path, str) and os.path.isfile(path):
+                self.open_path(path)
+        current = data.get("current") or ""
+        if current and self.doc_key(current) in self.docs:
+            self.select_doc(self.doc_key(current))
+            self.keep_file_tab = True
+        elif self.doc_tabs.count():
+            self.doc_tabs.setCurrentIndex(self.task_tab())
 
     def raise_window(self):
         self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized)
@@ -1370,8 +1466,6 @@ class MainWindow(QMainWindow):
         self.save_timer.stop()
         self.flush()
         self.assist.close()
-        s = self.settings
-        s.setValue("geometry", self.saveGeometry())
-        s.setValue("docks", self.work.saveState(DOCKS_VERSION))
-        s.setValue("zoom", self.editor.get_zoom())
+        self.layout_saved = None
+        self.save_layout()
         event.accept()

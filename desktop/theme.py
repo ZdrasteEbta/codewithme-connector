@@ -193,7 +193,7 @@ QTreeView#explorerTree::item {{ padding: 3px 2px; border-radius: 5px; }}
 QTreeView#explorerTree::item:hover {{ background: {c['panel']}; }}
 QTreeView#explorerTree::item:selected {{ background: {tint(c['done'], 0.18)}; color: {c['fg']}; }}
 #logBar {{ background: {c['deep']}; border-top: 1px solid {c['line']}; border-bottom: 1px solid {c['line']}; }}
-QPlainTextEdit#stdinBox {{ background: {c['code']}; border: 0; border-bottom: 1px solid {c['line']}; border-radius: 0; color: {c['fg']}; font-size: 12px; padding: 4px 10px; }}
+QPlainTextEdit#stdinBox {{ background: {c['code']}; border: 0; border-top: 1px solid {c['line']}; border-radius: 0; color: {c['fg']}; font-size: 12px; padding: 4px 10px; }}
 #logTitle {{ color: {c['mute']}; font-size: 11px; font-weight: 700; }}
 QPlainTextEdit#logBox {{ background: {c['code']}; border: 0; border-radius: 0; color: {c['fg2']}; font-size: 12px; padding: 6px 10px; }}
 QMainWindow#work QTabBar {{ background: {c['deep']}; }}

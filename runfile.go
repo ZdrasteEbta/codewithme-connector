@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // RunFileRequest — запуск любого файла из IDE прямо в его папке, как в обычном редакторе:
@@ -19,6 +20,85 @@ type RunFileRequest struct {
 	Stdin            string `json:"stdin"`
 	TimeLimitMs      int    `json:"timeLimitMs"`
 	OutputLimitBytes int    `json:"outputLimitBytes"`
+	// Interactive — ввод не закрывается сразу: IDE досылает строки через /app/run-io,
+	// пока программа работает, а вывод забирает по кусочкам, как в терминале
+	Interactive bool `json:"interactive"`
+}
+
+// liveRun — запущенная интерактивно программа: её вывод на лету и открытый ввод
+type liveRun struct {
+	mu       *sync.Mutex
+	stdout   *limitedBuffer
+	stderr   *limitedBuffer
+	stdin    io.WriteCloser
+	inMu     sync.Mutex
+	finished bool
+}
+
+// RunIORequest — ввод для программы и места, с которых IDE ещё не видела вывод
+type RunIORequest struct {
+	RunID   string `json:"runId"`
+	Input   string `json:"input"`
+	EOF     bool   `json:"eof"`
+	OutFrom int    `json:"outFrom"`
+	ErrFrom int    `json:"errFrom"`
+}
+
+type RunIOReply struct {
+	Known  bool   `json:"known"`
+	Done   bool   `json:"done"`
+	Out    string `json:"out"`
+	Err    string `json:"err"`
+	OutPos int    `json:"outPos"`
+	ErrPos int    `json:"errPos"`
+}
+
+// tail — вывод после from, без последней недописанной буквы (UTF-8 приходит кусками)
+func tail(buf []byte, from int) (string, int) {
+	if from < 0 || from > len(buf) {
+		from = len(buf)
+	}
+	end := len(buf)
+	for k := 0; k < 3 && end > from && !utf8.Valid(buf[from:end]); k++ {
+		end--
+	}
+	if !utf8.Valid(buf[from:end]) {
+		end = len(buf)
+	}
+	return strings.ToValidUTF8(string(buf[from:end]), "�"), end
+}
+
+// IO — отдаёт новый вывод и передаёт ввод интерактивной программе
+func (r *Runs) IO(req RunIORequest) RunIOReply {
+	r.mu.Lock()
+	live := r.live[req.RunID]
+	r.mu.Unlock()
+	if live == nil {
+		return RunIOReply{}
+	}
+	if (req.Input != "" || req.EOF) && live.stdin != nil {
+		go func() {
+			live.inMu.Lock()
+			defer live.inMu.Unlock()
+			if req.Input != "" {
+				_, _ = io.WriteString(live.stdin, req.Input)
+			}
+			if req.EOF {
+				_ = live.stdin.Close()
+			}
+		}()
+	}
+	live.mu.Lock()
+	out, outPos := tail(live.stdout.buf, req.OutFrom)
+	errOut, errPos := tail(live.stderr.buf, req.ErrFrom)
+	done := live.finished && outPos == len(live.stdout.buf) && errPos == len(live.stderr.buf)
+	live.mu.Unlock()
+	if done {
+		r.mu.Lock()
+		delete(r.live, req.RunID)
+		r.mu.Unlock()
+	}
+	return RunIOReply{Known: true, Done: done, Out: out, Err: errOut, OutPos: outPos, ErrPos: errPos}
 }
 
 const maxFileRunMs = 10 * 60 * 1000
@@ -106,13 +186,43 @@ func (ws *Workspace) RunFile(req RunFileRequest, runs *Runs) RunResult {
 	if err := cmd.Start(); err != nil {
 		return RunResult{Status: "env-error", Error: err.Error()}
 	}
+	var live *liveRun
 	runs.mu.Lock()
 	runs.procs[req.RunID] = cmd
+	if req.Interactive {
+		live = &liveRun{mu: &mu, stdout: stdout, stderr: stderr, stdin: stdinPipe}
+		runs.live[req.RunID] = live
+	}
 	runs.mu.Unlock()
-	go func() {
-		_, _ = io.WriteString(stdinPipe, req.Stdin)
-		_ = stdinPipe.Close()
-	}()
+	if live != nil {
+		// Ввод остаётся открытым: строки придут через /app/run-io
+		go func() {
+			live.inMu.Lock()
+			defer live.inMu.Unlock()
+			if req.Stdin != "" {
+				_, _ = io.WriteString(stdinPipe, req.Stdin)
+			}
+		}()
+		defer func() {
+			mu.Lock()
+			live.finished = true
+			mu.Unlock()
+			_ = stdinPipe.Close()
+			// IDE заберёт остаток вывода; если не заберёт — запись всё равно уберём
+			time.AfterFunc(time.Minute, func() {
+				runs.mu.Lock()
+				if runs.live[req.RunID] == live {
+					delete(runs.live, req.RunID)
+				}
+				runs.mu.Unlock()
+			})
+		}()
+	} else {
+		go func() {
+			_, _ = io.WriteString(stdinPipe, req.Stdin)
+			_ = stdinPipe.Close()
+		}()
+	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
 	timedOut := false

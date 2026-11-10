@@ -357,6 +357,15 @@ func (s *Server) serveApp(w http.ResponseWriter, r *http.Request) {
 		}
 		reply(200, s.ws.RunFile(req, s.runs))
 
+	case r.Method == http.MethodPost && r.URL.Path == "/app/run-io":
+		// Интерактивный запуск файла: ввод строк, пока программа ждёт input(), и вывод на лету
+		var req RunIORequest
+		if !readJSON(r, &req) || !runIDRE.MatchString(req.RunID) || len(req.Input) > maxOutput {
+			reply(400, map[string]any{"error": "bad-request"})
+			return
+		}
+		reply(200, s.runs.IO(req))
+
 	case r.Method == http.MethodPost && r.URL.Path == "/app/cancel":
 		var req struct {
 			RunID string `json:"runId"`

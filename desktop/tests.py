@@ -52,6 +52,7 @@ class TestRunner(QObject):
     step = pyqtSignal(str)
     result = pyqtSignal(int, dict)
     file_done = pyqtSignal(dict)
+    live = pyqtSignal(str, str)  # новый вывод и ошибки запущенного файла, пока он работает
     finished = pyqtSignal()
 
     def __init__(self, api, parent=None):
@@ -61,10 +62,43 @@ class TestRunner(QObject):
         self.current = None
         self.running = False
         self.mode = "tests"
+        self.inputs = []
+        self.inputs_lock = threading.Lock()
+
+    def send_input(self, text: str = "", eof: bool = False) -> None:
+        """Строка для input() работающей программы; уйдёт со следующим опросом."""
+        with self.inputs_lock:
+            self.inputs.append((text, eof))
+
+    def _poll_live(self, run_id: str, finished: threading.Event) -> None:
+        """Забирает вывод на лету и отдаёт введённые строки, пока программа не закончится."""
+        out_pos = err_pos = 0
+        while True:
+            with self.inputs_lock:
+                pending, self.inputs = self.inputs, []
+            text = "".join(x for x, _ in pending)
+            eof = any(e for _, e in pending)
+            status, res = self.api.post("/app/run-io", {
+                "runId": run_id, "input": text, "eof": eof, "outFrom": out_pos, "errFrom": err_pos,
+            })
+            if status == 200 and res.get("known"):
+                out_pos, err_pos = res.get("outPos", out_pos), res.get("errPos", err_pos)
+                if res.get("out") or res.get("err"):
+                    self.live.emit(res.get("out") or "", res.get("err") or "")
+                if res.get("done"):
+                    return
+            elif finished.is_set():
+                return  # запуск не дошёл до программы (ошибка сборки, нет файла)
+            elif pending:
+                with self.inputs_lock:  # программа ещё не стартовала: строки не теряем
+                    self.inputs[:0] = pending
+            time.sleep(0.05)
 
     def start_file(self, path: str, language: str, stdin: str, texts: dict) -> None:
         """Любой файл из IDE: в своей папке, вывод целиком в журнал Debug."""
         self.cancelled, self.running, self.mode = False, True, "file"
+        with self.inputs_lock:
+            self.inputs = []  # строки, набранные пока ставится Python, дойдут до программы
         threading.Thread(target=self._work_file, args=(path, language, stdin, texts), daemon=True).start()
 
     def _ensure(self, language, pip, t):
@@ -89,10 +123,17 @@ class TestRunner(QObject):
         elif not self.cancelled:
             self.step.emit(t["running"])
             self.current = f"file{int(time.time() * 1000)}"
+            finished = threading.Event()
+            poller = threading.Thread(target=self._poll_live, args=(self.current, finished), daemon=True)
+            poller.start()
             status, res = self.api.post("/app/run-file", {
-                "runId": self.current, "path": path, "stdin": stdin,
+                "runId": self.current, "path": path, "stdin": stdin, "interactive": True,
                 "timeLimitMs": FILE_TIME_MS, "outputLimitBytes": OUTPUT_LIMIT,
             }, timeout=FILE_TIME_MS / 1000 + 180)
+            finished.set()
+            poller.join(5)  # весь вывод уже показан на лету, дальше только итог
+            if status == 200 and res.get("status") != "ce":
+                res = {**res, "stdout": "", "stderr": "", "live": True}
             self.file_done.emit(res if status == 200 else {"status": "env-error", "error": t["run_failed"]})
         self._done()
 
