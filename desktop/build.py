@@ -69,4 +69,7 @@ if sys.platform == "win32":
     subprocess.run([go, "build", "-trimpath", "-ldflags", f"-s -w -H windowsgui -X main.version={version}", "-o", str(out), "."],
                    cwd=root / "launcher", env=env, check=True)
     archive.unlink()
-    print(f"Готово: {out} (версия {version})")
+    # Go не умеет вшивать иконку: ставим её тем же способом, что PyInstaller ставит своему .exe
+    from PyInstaller.utils.win32.icon import CopyIcons
+    CopyIcons(str(out), str(here / "icon.ico"))
+    print(f"Built {out} (version {version})")  # латиницей: консоль Windows в CI не печатает кириллицу
