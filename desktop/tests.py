@@ -14,6 +14,7 @@ from theme import code_family
 
 INSTALL_POLL_S = 0.8
 OUTPUT_LIMIT = 1 << 20
+FILE_TIME_MS = 10 * 60 * 1000  # обычный запуск файла: игры и окна могут работать долго, «Стоп» прерывает
 MAX_LINES = 8
 NUMBER = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
 
@@ -50,6 +51,7 @@ class TestRunner(QObject):
 
     step = pyqtSignal(str)
     result = pyqtSignal(int, dict)
+    file_done = pyqtSignal(dict)
     finished = pyqtSignal()
 
     def __init__(self, api, parent=None):
@@ -58,9 +60,44 @@ class TestRunner(QObject):
         self.cancelled = False
         self.current = None
         self.running = False
+        self.mode = "tests"
+
+    def start_file(self, path: str, language: str, stdin: str, texts: dict) -> None:
+        """Любой файл из IDE: в своей папке, вывод целиком в журнал Debug."""
+        self.cancelled, self.running, self.mode = False, True, "file"
+        threading.Thread(target=self._work_file, args=(path, language, stdin, texts), daemon=True).start()
+
+    def _ensure(self, language, pip, t):
+        """Ставит язык, если его ещё нет. Возвращает текст ошибки или пустую строку."""
+        body = {"language": "python", "pip": pip} if language == "python" else {"language": language}
+        while not self.cancelled:
+            status, data = self.api.post("/app/install", body, timeout=10)
+            state = data.get("state") if status == 200 else "error"
+            if state == "ready":
+                return ""
+            if state == "installing":
+                self.step.emit(t["installing_step"].format(step=data.get("step") or t["installing"]))
+                time.sleep(INSTALL_POLL_S)
+                continue
+            return data.get("error") or t["deps_failed"]
+        return ""
+
+    def _work_file(self, path, language, stdin, t):
+        error = self._ensure(language, [], t)
+        if error:
+            self.file_done.emit({"status": "env-error", "error": error})
+        elif not self.cancelled:
+            self.step.emit(t["running"])
+            self.current = f"file{int(time.time() * 1000)}"
+            status, res = self.api.post("/app/run-file", {
+                "runId": self.current, "path": path, "stdin": stdin,
+                "timeLimitMs": FILE_TIME_MS, "outputLimitBytes": OUTPUT_LIMIT,
+            }, timeout=FILE_TIME_MS / 1000 + 180)
+            self.file_done.emit(res if status == 200 else {"status": "env-error", "error": t["run_failed"]})
+        self._done()
 
     def start(self, jobs, language: str, code: str, pip: list, time_ms: int, texts: dict) -> None:
-        self.cancelled, self.running = False, True
+        self.cancelled, self.running, self.mode = False, True, "tests"
         threading.Thread(target=self._work, args=(jobs, language, code, pip, time_ms, texts), daemon=True).start()
 
     def stop(self) -> None:
@@ -69,18 +106,10 @@ class TestRunner(QObject):
             self.api.post("/app/cancel", {"runId": self.current})
 
     def _work(self, jobs, language, code, pip, time_ms, t):
-        body = {"language": "python", "pip": pip} if language == "python" else {"language": language}
-        while not self.cancelled:
-            status, data = self.api.post("/app/install", body, timeout=10)
-            state = data.get("state") if status == 200 else "error"
-            if state == "ready":
-                break
-            if state == "installing":
-                self.step.emit(t["installing_step"].format(step=data.get("step") or t["installing"]))
-                time.sleep(INSTALL_POLL_S)
-                continue
+        error = self._ensure(language, pip, t)
+        if error:
             for index, _ in jobs:
-                self.result.emit(index, {"status": "env-error", "error": data.get("error") or t["deps_failed"]})
+                self.result.emit(index, {"status": "env-error", "error": error})
             self._done()
             return
         for n, (index, stdin) in enumerate(jobs):

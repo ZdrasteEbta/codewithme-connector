@@ -76,6 +76,17 @@ def icon(name: str, color: str, size: int = 14) -> QPixmap:
         p.setPen(pen)
         p.drawPath(_line([(7, 7), (17, 17)]))
         p.drawPath(_line([(17, 7), (7, 17)]))
+    elif name == "new_file":
+        pen.setWidthF(2)
+        p.setPen(pen)
+        p.drawPath(_line([(13, 3), (6, 3), (6, 21), (18, 21), (18, 8), (13, 3), (13, 8), (18, 8)]))
+        p.drawPath(_line([(12, 11), (12, 17)]))
+        p.drawPath(_line([(9, 14), (15, 14)]))
+    elif name == "open":
+        pen.setWidthF(2)
+        p.setPen(pen)
+        p.drawPath(_line([(3, 18), (3, 6), (9, 6), (11, 8), (19, 8), (19, 11)]))
+        p.drawPath(_line([(3, 18), (6, 11), (22, 11), (19, 18), (3, 18)]))
     elif name == "dot":
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(color))

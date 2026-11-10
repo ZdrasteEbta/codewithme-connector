@@ -3,12 +3,13 @@ import base64
 import html
 import json
 import re
+import time
 
-from PyQt6.QtCore import QByteArray, QSize, Qt, QTimer, QUrl
-from PyQt6.QtGui import QFontMetrics, QIcon, QImage, QTextDocument
+from PyQt6.QtCore import QByteArray, QSize, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QFont, QFontMetrics, QIcon, QImage, QTextDocument
 from PyQt6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
-    QTextBrowser, QVBoxLayout, QWidget, QWidgetAction,
+    QSplitter, QTextBrowser, QVBoxLayout, QWidget, QWidgetAction,
 )
 
 from icons import done_mark, icon
@@ -18,6 +19,7 @@ CELL_SIZE = 30
 CELL_GAP = 5
 CHIPS_IN_ROW = 16
 MAX_OUTPUT = 40000
+MAX_LOG_BLOCKS = 20000  # строк в журнале запусков, старые уходят
 PY_ERROR = re.compile(r'(File "([^"\n]*)", )(line (\d+))')
 FILE_ERROR = re.compile(r'([\w./\\:-]*\.(?:rs|js|mjs)):(\d+)')
 FOREIGN = ("site-packages", "lib\\python", "lib/python", "/rustc/", "node_modules", "node:", "<frozen")
@@ -303,11 +305,31 @@ class TaskTabs(QWidget):
 
     def __init__(self, on_open):
         super().__init__()
-        self.on_open = on_open
+        self.on_open = on_open  # on_open(href, key)
         self.row = QHBoxLayout(self)
         self.row.setContentsMargins(0, 0, 0, 0)
         self.row.setSpacing(2)
         self.sig = None
+        self.buttons = {}
+        self.key = None
+        self.active = True  # False — сейчас открыт другой файл, задача не подсвечена
+        self.compact = False  # мало места: на вкладках только буквы, название — в подсказке
+
+    def extra_width(self) -> int:
+        """Насколько ряд станет шире, если вернуть полные названия."""
+        return sum(b.extra_w for b in self.buttons.values())
+
+    def set_compact(self, compact: bool):
+        if compact == self.compact:
+            return
+        self.compact = compact
+        for b in self.buttons.values():
+            b.setText(b.short_text if compact else b.full_text)
+
+    def set_active(self, active: bool):
+        self.active = active
+        for key, b in self.buttons.items():
+            set_active_prop(b, active and key == self.key)
 
     @staticmethod
     def current_row(tree: dict, key):
@@ -323,28 +345,181 @@ class TaskTabs(QWidget):
         if sig == self.sig:
             return
         self.sig = sig
+        self.key = key
+        self.buttons = {}
         clear_layout(self.row)
         cells = (row or {}).get("cells") or []
         for cell in cells:
             label = str(cell.get("label", ""))
             title = cell.get("title") or ""
             text = f"{label}. {title}" if title else label
-            b = QPushButton(QFontMetrics(self.font()).elidedText(text, Qt.TextElideMode.ElideRight, 190))
+            font = QFont(self.font())  # как у вкладки в теме: 13px, жирный — иначе «…» не помещается
+            font.setPixelSize(13)
+            font.setWeight(QFont.Weight.Bold)
+            b = QPushButton(QFontMetrics(font).elidedText(text, Qt.TextElideMode.ElideRight, 180))
             b.setObjectName("taskTab")
             b.setCursor(Qt.CursorShape.PointingHandCursor)
-            active = cell.get("key") == key
+            active = self.active and cell.get("key") == key
             b.setProperty("active", "true" if active else "false")
             if cell.get("done"):
                 b.setIcon(QIcon(icon("check", c["done"], 12)))
             b.setToolTip(title or text)
             href = cell.get("href", "")
-            b.clicked.connect(lambda _=False, h=href: self.on_open(h))
+            b.clicked.connect(lambda _=False, h=href, k=cell.get("key"): self.on_open(h, k))
+            self.buttons[cell.get("key")] = b
+            b.full_text, b.short_text = b.text(), label
+            fm = QFontMetrics(font)
+            b.extra_w = max(0, fm.horizontalAdvance(b.full_text) - fm.horizontalAdvance(label)) + 4
+            if self.compact:
+                b.setText(label)
             self.row.addWidget(b)
         if row and not cells and row.get("hint"):
             hint = QLabel(row["hint"])
             hint.setObjectName("muted")
             self.row.addWidget(hint)
-        self.row.addStretch(1)
+
+
+class TabScroll(QScrollArea):
+    """Ряд вкладок без полосы прокрутки: колесо листает его вбок, выбранная вкладка всегда видна."""
+
+    def __init__(self, strip: QWidget, tasks: "TaskTabs"):
+        super().__init__()
+        self.tasks = tasks
+        self.setObjectName("tabScroll")
+        self.setWidget(strip)
+        self.setWidgetResizable(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        strip.installEventFilter(self)
+
+    def sizeHint(self):
+        return QSize(200, self.widget().sizeHint().height())
+
+    def minimumSizeHint(self):
+        return QSize(80, self.widget().minimumSizeHint().height())
+
+    def wheelEvent(self, e):
+        bar = self.horizontalScrollBar()
+        delta = e.angleDelta().y() or e.angleDelta().x()
+        bar.setValue(bar.value() - delta // 2)
+        e.accept()
+
+    def eventFilter(self, obj, e):
+        if e.type() == e.Type.LayoutRequest:
+            self.setFixedHeight(self.widget().sizeHint().height())
+            QTimer.singleShot(0, self.fit)
+        return False
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        QTimer.singleShot(0, self.fit)
+
+    def fit(self):
+        """Не хватает места — у задач остаются буквы A, B, C; появилось — названия возвращаются."""
+        full = self.widget().sizeHint().width() + (self.tasks.extra_width() if self.tasks.compact else 0)
+        self.tasks.set_compact(full > self.viewport().width())
+        self.show_active()
+
+    def show_active(self):
+        for b in self.widget().findChildren(QPushButton):
+            if b.property("active") == "true" and b.isVisible():
+                self.ensureWidgetVisible(b, 24, 0)
+                return
+
+
+def set_active_prop(widget, active: bool):
+    value = "true" if active else "false"
+    if widget.property("active") != value:
+        widget.setProperty("active", value)
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+
+
+class DocTabs(QWidget):
+    """Вкладки открытых файлов в одном ряду с задачами A, B, C.
+    Нулевая вкладка — файл задачи: своей кнопки у неё нет, её показывают сами вкладки задач.
+    Повторяет нужную часть QTabBar, чтобы окно работало с ней так же."""
+
+    currentChanged = pyqtSignal(int)
+
+    def __init__(self):
+        super().__init__()
+        self.row = QHBoxLayout(self)
+        self.row.setContentsMargins(0, 0, 0, 0)
+        self.row.setSpacing(2)
+        self.tabs = []  # {"data", "button"}
+        self.current = -1
+
+    def count(self) -> int:
+        return len(self.tabs)
+
+    def currentIndex(self) -> int:
+        return self.current
+
+    def addTab(self, text: str) -> int:
+        b = None
+        if self.tabs:  # первая вкладка — задача, без кнопки
+            b = QPushButton(text)
+            b.setObjectName("taskTab")
+            b.setProperty("file", "true")
+            b.setProperty("active", "false")
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            b.clicked.connect(lambda _=False, w=b: self.setCurrentIndex(self._index_of(w)))
+            inner = QHBoxLayout(b)
+            inner.setContentsMargins(0, 0, 6, 0)
+            inner.addStretch(1)
+            self.row.addWidget(b)
+        self.tabs.append({"data": None, "button": b})
+        if self.current < 0:
+            self.setCurrentIndex(0)
+        return len(self.tabs) - 1
+
+    def _index_of(self, widget) -> int:
+        return next((i for i, t in enumerate(self.tabs) if t["button"] is widget), -1)
+
+    def setTabData(self, i: int, data):
+        self.tabs[i]["data"] = data
+
+    def tabData(self, i: int):
+        return self.tabs[i]["data"] if 0 <= i < len(self.tabs) else None
+
+    def setTabText(self, i: int, text: str):
+        if self.tabs[i]["button"]:
+            self.tabs[i]["button"].setText(text)
+
+    def tabText(self, i: int) -> str:
+        return self.tabs[i]["button"].text() if self.tabs[i]["button"] else ""
+
+    def setTabToolTip(self, i: int, text: str):
+        if self.tabs[i]["button"]:
+            self.tabs[i]["button"].setToolTip(text)
+
+    def setTabButton(self, i: int, _position, widget):
+        b = self.tabs[i]["button"]
+        if b:
+            b.layout().addWidget(widget, 0, Qt.AlignmentFlag.AlignVCenter)
+
+    def setCurrentIndex(self, i: int):
+        if not 0 <= i < len(self.tabs) or i == self.current:
+            return
+        self.current = i
+        for n, t in enumerate(self.tabs):
+            if t["button"]:
+                set_active_prop(t["button"], n == i)
+        self.currentChanged.emit(i)
+
+    def removeTab(self, i: int):
+        tab = self.tabs.pop(i)
+        if tab["button"]:
+            self.row.removeWidget(tab["button"])
+            tab["button"].deleteLater()
+        if self.current == i:
+            self.current = -1
+            self.setCurrentIndex(max(0, i - 1))  # как в обычных IDE: соседняя вкладка слева
+        elif self.current > i:
+            self.current -= 1
 
 
 class ResultPanel(QWidget):
@@ -400,7 +575,57 @@ class ResultPanel(QWidget):
         self.browser.setOpenLinks(False)
         self.browser.anchorClicked.connect(on_link)
         self.browser.document().setDocumentMargin(18)
-        root.addWidget(self.browser, 1)
+        # Ниже — журнал всех запусков: тесты, установка, сборка, запуски на сайте
+        log_host = QWidget()
+        log_host.setObjectName("logHost")
+        lv = QVBoxLayout(log_host)
+        lv.setContentsMargins(0, 0, 0, 0)
+        lv.setSpacing(0)
+        log_bar = QFrame()
+        log_bar.setObjectName("logBar")
+        lb = QHBoxLayout(log_bar)
+        lb.setContentsMargins(14, 4, 8, 4)
+        self.log_title = QLabel()
+        self.log_title.setObjectName("logTitle")
+        self.log_clear = button(kind="quiet")
+        self.log_clear.clicked.connect(lambda: self.log_box.clear())
+        lb.addWidget(self.log_title, 1)
+        lb.addWidget(self.log_clear)
+        self.log_box = QPlainTextEdit()
+        self.log_box.setObjectName("logBox")
+        self.log_box.setReadOnly(True)
+        self.log_box.setMaximumBlockCount(MAX_LOG_BLOCKS)
+        self.log_box.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.stdin = QPlainTextEdit()
+        self.stdin.setObjectName("stdinBox")
+        self.stdin.setFixedHeight(48)
+        lv.addWidget(log_bar)
+        lv.addWidget(self.stdin)
+        lv.addWidget(self.log_box, 1)
+        split = QSplitter(Qt.Orientation.Vertical)
+        split.setHandleWidth(1)
+        split.addWidget(self.browser)
+        split.addWidget(log_host)
+        split.setSizes([110, 300])
+        root.addWidget(split, 1)
+
+    def set_texts(self, t):
+        self.log_title.setText(t["debug_log"])
+        self.log_clear.setText(t["debug_clear"])
+        self.stdin.setPlaceholderText(t["file_stdin"])
+
+    def log(self, title: str, body: str = "", error: str = "", c=None):
+        """Добавляет запись в журнал: заголовок, вывод программы и ошибки красным."""
+        esc = lambda x: html.escape(x, quote=False)
+        stamp = time.strftime("%H:%M:%S")
+        parts = [f'<span style="color:{c["mute"]};">{stamp}</span> <b>{esc(title)}</b>']
+        if body:
+            parts.append(f'<pre style="margin:0;">{esc(body.rstrip()[:MAX_OUTPUT])}</pre>')
+        if error:
+            parts.append(f'<pre style="margin:0;color:{c["rose"]};">{esc(error.rstrip()[:MAX_OUTPUT])}</pre>')
+        self.log_box.appendHtml("".join(parts))
+        bar = self.log_box.verticalScrollBar()
+        bar.setValue(bar.maximum())
 
     def fill_verdict(self, s, t, c):
         result = s.get("result")

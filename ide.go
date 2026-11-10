@@ -344,6 +344,19 @@ func (s *Server) serveApp(w http.ResponseWriter, r *http.Request) {
 		res := s.ws.Run(req, s.runs)
 		reply(200, res)
 
+	case r.Method == http.MethodPost && r.URL.Path == "/app/run-file":
+		// Любой открытый в IDE файл: запускается в своей папке, вывод уходит в журнал Debug.
+		// Сайт сюда попасть не может: запросы принимаются только с адреса самого окна (Origin)
+		var req RunFileRequest
+		ok := readJSON(r, &req) && runIDRE.MatchString(req.RunID) && filepath.IsAbs(req.Path) &&
+			fileLanguage(req.Path) != "" && req.TimeLimitMs >= 1 && req.TimeLimitMs <= maxFileRunMs &&
+			req.OutputLimitBytes >= 1 && req.OutputLimitBytes <= maxOutput
+		if !ok {
+			reply(400, map[string]any{"error": "bad-request"})
+			return
+		}
+		reply(200, s.ws.RunFile(req, s.runs))
+
 	case r.Method == http.MethodPost && r.URL.Path == "/app/cancel":
 		var req struct {
 			RunID string `json:"runId"`
