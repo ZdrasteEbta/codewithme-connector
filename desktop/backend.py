@@ -1,21 +1,17 @@
 """Связь приложения с невидимым помощником: запуск кода и обмен с сайтом."""
+import http.client
 import json
 import os
 import subprocess
 import sys
 import threading
-import urllib.error
 import urllib.parse
-import urllib.request
 from collections import deque
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
 HELPER = "codewithme-helper.exe" if os.name == "nt" else "codewithme-helper"
-
-# Прокси системы не должен перехватывать запросы к своему же компьютеру
-_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def helper_path() -> Path:
@@ -70,33 +66,54 @@ class Helper:
 
 
 class Api:
+    """Запросы к помощнику. Соединение держится открытым: новое на Windows стоит около 15 мс,
+    а повторное меньше миллисекунды. У каждого потока своё соединение."""
+
     def __init__(self, port: int):
+        self.port = port
         self.origin = f"http://127.0.0.1:{port}"
+        self.local = threading.local()
 
     def get(self, path: str, timeout: float = 5):
-        return self._send(urllib.request.Request(self.origin + path), timeout)
+        return self._send("GET", path, None, {}, timeout)
 
     def post(self, path: str, body: dict, timeout: float = 5):
-        req = urllib.request.Request(
-            self.origin + path,
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json", "Origin": self.origin},
-            method="POST",
-        )
-        return self._send(req, timeout)
+        headers = {"Content-Type": "application/json", "Origin": self.origin}
+        return self._send("POST", path, json.dumps(body).encode("utf-8"), headers, timeout)
 
-    @staticmethod
-    def _send(req, timeout):
-        try:
-            with _opener.open(req, timeout=timeout) as res:
-                return res.status, json.loads(res.read() or b"{}")
-        except urllib.error.HTTPError as err:
+    def _drop(self) -> None:
+        conn = getattr(self.local, "conn", None)
+        if conn is not None:
+            conn.close()
+        self.local.conn = None
+
+    def _send(self, method, path, body, headers, timeout):
+        for attempt in (0, 1):
+            conn = getattr(self.local, "conn", None)
+            if conn is None:
+                conn = self.local.conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=timeout)
+            conn.timeout = timeout
+            if conn.sock is not None:
+                conn.sock.settimeout(timeout)
             try:
-                return err.code, json.loads(err.read() or b"{}")
+                conn.request(method, path, body=body, headers=headers)
+                res = conn.getresponse()
+                data = res.read()
+                if res.will_close:
+                    self._drop()
+            except (http.client.RemoteDisconnected, ConnectionResetError, ConnectionAbortedError, BrokenPipeError):
+                self._drop()  # помощник закрыл старое соединение: пробуем один раз на новом
+                if attempt:
+                    return 0, {}
+                continue
+            except (OSError, http.client.HTTPException):
+                self._drop()
+                return 0, {}
+            try:
+                return res.status, json.loads(data or b"{}")
             except ValueError:
-                return err.code, {}
-        except (OSError, ValueError):
-            return 0, {}
+                return res.status, {}
+        return 0, {}
 
     def file(self, key: str):
         return self.get("/app/file?key=" + urllib.parse.quote(key, safe=""))

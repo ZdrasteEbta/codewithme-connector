@@ -71,6 +71,11 @@ def icon(name: str, color: str, size: int = 14) -> QPixmap:
         p.setPen(pen)
         p.drawArc(QRectF(4, 4, 16, 16), 150 * 16, -300 * 16)
         p.drawPath(_line([(4, 4), (4, 9), (9, 9)]))
+    elif name == "close":
+        pen.setWidthF(2.2)
+        p.setPen(pen)
+        p.drawPath(_line([(7, 7), (17, 17)]))
+        p.drawPath(_line([(17, 7), (7, 17)]))
     elif name == "dot":
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(color))

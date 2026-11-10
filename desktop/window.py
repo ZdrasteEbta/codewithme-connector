@@ -6,8 +6,8 @@ import sys
 from PyQt6.QtCore import QSettings, Qt, QTimer, QUrl
 from PyQt6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
-    QApplication, QButtonGroup, QDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
-    QMainWindow, QMessageBox, QPlainTextEdit, QSizePolicy, QSplitter, QStackedWidget,
+    QApplication, QDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
+    QDockWidget, QMainWindow, QMessageBox, QSizePolicy, QStackedWidget, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -15,11 +15,13 @@ from assist import Assistant
 from backend import Api, StatePoller
 from editor import CodeEditor
 from icons import icon, mascot
-from panels import KeyButton, ResultPanel, Sidebar, button
+from panels import KeyButton, ResultPanel, Sidebar, TaskTabs, button
+from tests import TestRunner, TestsPanel, compare_output
 from texts import TEXTS, system_locale
 from theme import palette, stylesheet
 
 LANGUAGE_NAMES = {"python": "Python", "javascript": "JavaScript", "node": "Node.js", "dom": "JavaScript", "html": "HTML", "rust": "Rust"}
+DOCKS_VERSION = 1  # растёт, когда меняется набор панелей: старое расположение тогда забывается
 
 
 class FindBar(QFrame):
@@ -197,20 +199,12 @@ class MainWindow(QMainWindow):
         self.pages = QStackedWidget()
         self.setCentralWidget(self.pages)
 
-        self.split = QSplitter(Qt.Orientation.Horizontal)
-        self.split.setHandleWidth(1)
-        self.pages.addWidget(self.split)
+        main = QWidget()
+        mv = QVBoxLayout(main)
+        mv.setContentsMargins(0, 0, 0, 0)
+        mv.setSpacing(0)
+        self.pages.addWidget(main)
         self.pages.addWidget(self.build_connect())
-
-        self.sidebar = Sidebar(self.open_task, self.settings)
-        self.split.addWidget(self.sidebar)
-
-        right = QWidget()
-        rv = QVBoxLayout(right)
-        rv.setContentsMargins(0, 0, 0, 0)
-        rv.setSpacing(0)
-        self.split.addWidget(right)
-        self.split.setStretchFactor(1, 1)
 
         self.banner = QFrame()
         self.banner.setObjectName("banner")
@@ -222,7 +216,7 @@ class MainWindow(QMainWindow):
         self.banner_btn.clicked.connect(self.open_site)
         bh.addWidget(self.banner_text, 1)
         bh.addWidget(self.banner_btn)
-        rv.addWidget(self.banner)
+        mv.addWidget(self.banner)
 
         header = QFrame()
         header.setObjectName("header")
@@ -249,25 +243,37 @@ class MainWindow(QMainWindow):
         hh.addLayout(names, 1)
         for b in (self.reset_btn, self.stop_btn, self.run_btn, self.submit_btn):
             hh.addWidget(b)
-        rv.addWidget(header)
+        mv.addWidget(header)
 
-        self.vsplit = QSplitter(Qt.Orientation.Vertical)
-        self.vsplit.setHandleWidth(1)
-        rv.addWidget(self.vsplit, 1)
+        # Код посередине; курсы, тесты и результат — панели, которые можно перетаскивать,
+        # складывать вкладками в одно место или выносить отдельным окном, как в других IDE
+        self.work = QMainWindow()
+        self.work.setWindowFlags(Qt.WindowType.Widget)
+        self.work.setObjectName("work")
+        self.work.setDockOptions(
+            QMainWindow.DockOption.AnimatedDocks | QMainWindow.DockOption.AllowTabbedDocks
+            | QMainWindow.DockOption.AllowNestedDocks
+        )
+        self.work.setTabPosition(Qt.DockWidgetArea.AllDockWidgetAreas, QTabWidget.TabPosition.North)
+        mv.addWidget(self.work, 1)
+        self.sidebar = Sidebar(self.open_task, self.settings)
 
-        top = QWidget()
-        tv = QVBoxLayout(top)
+        middle = QWidget()
+        tv = QVBoxLayout(middle)
         tv.setContentsMargins(0, 0, 0, 0)
         tv.setSpacing(0)
         file_bar = QFrame()
         file_bar.setObjectName("fileBar")
         fb = QHBoxLayout(file_bar)
-        fb.setContentsMargins(18, 5, 18, 5)
+        fb.setContentsMargins(8, 6, 18, 0)
+        fb.setSpacing(10)
+        self.task_tabs = TaskTabs(self.open_task)
         self.file_label = QLabel()
         self.file_label.setObjectName("fileName")
         self.saved_label = QLabel()
         self.saved_label.setObjectName("savedState")
-        fb.addWidget(self.file_label, 1)
+        fb.addWidget(self.task_tabs, 1)
+        fb.addWidget(self.file_label)
         fb.addWidget(self.saved_label)
         tv.addWidget(file_bar)
         self.editor_stack = QStackedWidget()
@@ -286,50 +292,27 @@ class MainWindow(QMainWindow):
         tv.addWidget(self.editor_stack, 1)
         tv.addWidget(self.assist.bar)
         tv.addWidget(self.find_bar)
-        self.vsplit.addWidget(top)
+        self.work.setCentralWidget(middle)
 
-        self.bottom = QWidget()
-        bv = QVBoxLayout(self.bottom)
-        bv.setContentsMargins(0, 0, 0, 0)
-        bv.setSpacing(0)
-        bar = QFrame()
-        bar.setObjectName("outputBar")
-        ob = QHBoxLayout(bar)
-        ob.setContentsMargins(12, 5, 14, 5)
-        ob.setSpacing(2)
-        self.result_tab = button(checkable=True)
-        self.input_tab = button(checkable=True)
-        for tab in (self.result_tab, self.input_tab):
-            tab.setObjectName("tab")
-        self.tabs = QButtonGroup(self)
-        self.tabs.setExclusive(True)
-        self.tabs.addButton(self.result_tab)
-        self.tabs.addButton(self.input_tab)
-        self.result_tab.setChecked(True)
-        self.result_tab.clicked.connect(lambda: self.output_stack.setCurrentIndex(0))
-        self.input_tab.clicked.connect(lambda: self.output_stack.setCurrentIndex(1))
         self.busy = QLabel()
         self.busy.setObjectName("busyBar")
         self.run_time = QLabel()
         self.run_time.setObjectName("runTime")
-        ob.addWidget(self.result_tab)
-        ob.addWidget(self.input_tab)
-        ob.addSpacing(10)
-        ob.addWidget(self.busy, 1)
-        ob.addWidget(self.run_time)
-        bv.addWidget(bar)
-        self.output_stack = QStackedWidget()
+        self.tests_panel = TestsPanel(self.add_test)
         self.result_panel = ResultPanel(self.next_task, self.on_link)
         self.result = self.result_panel.browser
-        self.stdin = QPlainTextEdit()
-        self.output_stack.addWidget(self.result_panel)
-        self.output_stack.addWidget(self.stdin)
-        bv.addWidget(self.output_stack, 1)
-        self.vsplit.addWidget(self.bottom)
-        self.vsplit.setStretchFactor(0, 3)
-        self.vsplit.setStretchFactor(1, 2)
-        self.vsplit.setSizes([440, 260])
-        self.split.setSizes([280, 920])
+        self.sidebar_dock = self.make_dock("sidebarDock", self.sidebar)
+        self.tests_dock = self.make_dock("testsDock", self.tests_panel)
+        self.result_dock = self.make_dock("resultDock", self.result_panel)
+        self.tests_wanted = None
+        self.place_docks()
+
+        self.test_results = {}
+        self.local_busy = ""
+        self.runner = TestRunner(self.api, self)
+        self.runner.step.connect(self.on_test_step)
+        self.runner.result.connect(self.on_test_result)
+        self.runner.finished.connect(self.on_tests_finished)
 
         self.pos_label = QLabel()
         self.language_label = QLabel()
@@ -337,6 +320,8 @@ class MainWindow(QMainWindow):
         self.keys_label = QLabel()
         self.statusBar().addWidget(self.pos_label)
         self.statusBar().addWidget(self.language_label)
+        self.statusBar().addWidget(self.busy, 1)
+        self.statusBar().addPermanentWidget(self.run_time)
         self.statusBar().addPermanentWidget(self.code_label)
         self.statusBar().addPermanentWidget(self.keys_label)
         self.statusBar().setSizeGripEnabled(False)
@@ -453,6 +438,7 @@ class MainWindow(QMainWindow):
 
             ("view", "toggle_grid", ["Ctrl+B"], self.toggle_grid),
             ("view", "toggle_output", ["Ctrl+J"], self.toggle_output),
+            ("view", "reset_panels", [], self.place_docks),
             ("view", None, None, None),
             ("view", "zoom_in", ["Ctrl+=", "Ctrl++"], self.zoom_in),
             ("view", "zoom_out", ["Ctrl+-"], self.zoom_out),
@@ -487,10 +473,11 @@ class MainWindow(QMainWindow):
             act.setText(t[name])
         self.reset_btn.setText(t["reset"])
         self.stop_btn.setText(t["stop"])
-        self.result_tab.setText(t["output"])
-        self.input_tab.setText(t["stdin"])
-        self.stdin.setPlaceholderText(t["stdin_ph"])
+        self.sidebar_dock.setWindowTitle(t["toggle_grid"])
+        self.tests_dock.setWindowTitle(t["tests_tab"])
+        self.result_dock.setWindowTitle(t["output"])
         self.hint.setText(t["pick"])
+        self.show_tests()
         self.banner_text.setText(t["site_offline"])
         self.banner_btn.setText(t["open_site"])
         self.connect_title.setText(t["connect_title"])
@@ -589,7 +576,12 @@ class MainWindow(QMainWindow):
         self.place.setVisible(bool(place))
 
     def busy_text(self):
-        return (self.status or {}).get("busy") or ""
+        return self.local_busy or (self.status or {}).get("busy") or ""
+
+    def local_tests(self) -> bool:
+        """Задачи с вводом и выводом проверяются тестами прямо в окне, без сайта."""
+        task = self.task or {}
+        return bool(task) and not task.get("noInput") and task.get("language", "python") in ("python", "rust")
 
     def update_controls(self):
         online = bool(self.state.get("siteOnline"))
@@ -597,24 +589,27 @@ class MainWindow(QMainWindow):
         task, busy = self.task, bool(self.busy_text())
         ready = bool(task) and self.file_ready
         can = ready and online and not busy
+        can_run = ready and not busy and (online or self.local_tests())
         label = (task or {}).get("runLabel") or self.t["run"]
         submit = (task or {}).get("submitLabel")
         self.run_btn.setText(label)
         self.submit_btn.setText(submit or self.t["submit"])
         self.submit_btn.setVisible(bool(submit) or not task)
-        self.run_btn.setEnabled(can)
+        self.run_btn.setEnabled(can_run)
         self.submit_btn.setEnabled(can)
         self.reset_btn.setEnabled(ready and not busy)
         self.stop_btn.setVisible(busy)
-        self.acts["run"].setEnabled(can)
+        self.acts["run"].setEnabled(can_run)
         self.acts["submit"].setEnabled(can and bool(submit))
         self.acts["stop"].setEnabled(busy)
         self.acts["reset"].setEnabled(ready and not busy)
         self.acts["next"].setEnabled(bool((self.status or {}).get("next")) and online)
-        takes_input = bool(task) and not task.get("noInput")
-        self.input_tab.setVisible(takes_input)
-        if not takes_input and self.output_stack.currentIndex() == 1:
-            self.show_result_tab()
+        has_tests = self.local_tests()
+        if has_tests != self.tests_wanted:  # прячем тесты только при смене задачи, а не после закрытия руками
+            self.tests_wanted = has_tests
+            self.tests_dock.setVisible(has_tests)
+            if not has_tests:
+                self.show_result_tab()
         self.stop_btn.setToolTip("Shift+F5")
         self.busy.setText(self.busy_text())
 
@@ -630,8 +625,11 @@ class MainWindow(QMainWindow):
             self.key = key
             self.status = None
             self.title.setText(current.get("title", ""))
-            self.stdin.setPlainText(current.get("stdin") or "")
+            self.test_results = {}
             self.load_file(fresh=True)
+            self.show_tests()
+            if self.local_tests():
+                self.show_tests_tab()
         else:
             self.title.setText(current.get("title", ""))
             if self.editor.locked != bool(current.get("locked")) and self.file_ready:
@@ -707,10 +705,191 @@ class MainWindow(QMainWindow):
         self.api.command(kind, key=self.key, **extra)
 
     def run(self):
-        if self.run_btn.isEnabled():
-            self.show_output()
+        if not self.run_btn.isEnabled():
+            return
+        self.show_output()
+        if self.local_tests():
+            self.run_tests()
+        else:
             self.show_result_tab()
-            self.send("run", stdin=self.stdin.toPlainText())
+            self.send("run", stdin="")
+
+    # --- тесты справа ---
+
+    def site_tests(self) -> list:
+        task = self.task or {}
+        site = task.get("tests")
+        if site is None and task.get("stdin"):  # сайт старой версии присылает только первый пример
+            site = [{"in": task["stdin"], "out": ""}]
+        return [{"in": x.get("in", ""), "out": x.get("out", "")} for x in site or []]
+
+    def all_tests(self) -> list:
+        """Тесты с сайта (с правками ученика поверх, без удалённых) и свои. src — номер в своём списке."""
+        edits = self.site_edits()
+        tests = []
+        for i, x in enumerate(self.site_tests()):
+            edit = edits.get(str(i))
+            if edit and edit.get("hidden"):
+                continue
+            test = {"in": (edit or x).get("in", ""), "out": (edit or x).get("out", ""), "kind": "edited" if edit else "site", "src": i}
+            tests.append(test)
+        own = [{"in": x.get("in", ""), "out": x.get("out", ""), "kind": "own", "src": j} for j, x in enumerate(self.own_tests())]
+        return tests + own
+
+    def stored(self, name: str, empty):
+        if not self.key:
+            return empty
+        try:
+            value = json.loads(self.settings.value(f"{name}/{self.key}", json.dumps(empty)))
+        except (TypeError, ValueError):
+            return empty
+        return value if isinstance(value, type(empty)) else empty
+
+    def own_tests(self) -> list:
+        return [x for x in self.stored("tests", []) if isinstance(x, dict)]
+
+    def save_own_tests(self, tests: list) -> None:
+        self.settings.setValue(f"tests/{self.key}", json.dumps(tests, ensure_ascii=False))
+
+    def site_edits(self) -> dict:
+        """Правки тестов с сайта: номер теста -> {'in', 'out'}."""
+        return {k: v for k, v in self.stored("site-tests", {}).items() if isinstance(v, dict)}
+
+    def save_site_edits(self, edits: dict) -> None:
+        self.settings.setValue(f"site-tests/{self.key}", json.dumps(edits, ensure_ascii=False))
+
+    def show_tests(self):
+        tests = self.all_tests() if self.task else []
+        hidden = sum(1 for v in self.site_edits().values() if v.get("hidden")) if self.task else 0
+        self.tests_panel.show_tests(tests, self.t, palette(self.theme), self.run_one_test, self.edit_test,
+                                    self.delete_test, self.reset_test, hidden, self.restore_tests)
+        for index, (verdict, title, res) in self.test_results.items():
+            if index < len(self.tests_panel.cards):
+                self.tests_panel.cards[index].set_result(verdict, title, res)
+
+    def add_test(self):
+        if not self.task:
+            return
+        tests = self.own_tests()
+        tests.append({"in": "", "out": ""})
+        self.save_own_tests(tests)
+        self.show_tests()
+        self.tests_panel.focus_last_input()
+
+    def test_at(self, index: int):
+        tests = self.all_tests()
+        return tests[index] if 0 <= index < len(tests) else None
+
+    def delete_test(self, index: int):
+        """Свой тест удаляется насовсем, тест с сайта прячется: его можно вернуть кнопкой внизу."""
+        test = self.test_at(index)
+        if not test:
+            return
+        if test["kind"] == "own":
+            tests = self.own_tests()
+            del tests[test["src"]]
+            self.save_own_tests(tests)
+        else:
+            edits = self.site_edits()
+            edits[str(test["src"])] = {"hidden": True}
+            self.save_site_edits(edits)
+        self.test_results = {}
+        self.show_tests()
+
+    def restore_tests(self):
+        edits = {k: v for k, v in self.site_edits().items() if not v.get("hidden")}
+        self.save_site_edits(edits)
+        self.test_results = {}
+        self.show_tests()
+
+    def reset_test(self, index: int):
+        test = self.test_at(index)
+        edits = self.site_edits()
+        if test and test["kind"] != "own" and edits.pop(str(test["src"]), None) is not None:
+            self.save_site_edits(edits)
+            self.test_results.pop(index, None)
+            self.show_tests()
+
+    def edit_test(self, index: int, field: str, text: str):
+        test = self.test_at(index)
+        if not test:
+            return
+        if test["kind"] == "own":
+            tests = self.own_tests()
+            tests[test["src"]][field] = text
+            self.save_own_tests(tests)
+            return
+        i = test["src"]
+        original = self.site_tests()[i]
+        edits = self.site_edits()
+        edit = {"in": test["in"], "out": test["out"]}
+        edit[field] = text
+        if edit == original:
+            edits.pop(str(i), None)
+        else:
+            edits[str(i)] = edit
+        self.save_site_edits(edits)
+        if index < len(self.tests_panel.cards):
+            self.tests_panel.cards[index].mark_edited(str(i) in edits)
+
+    def run_one_test(self, index: int):
+        if self.run_btn.isEnabled() and self.local_tests():
+            self.run_tests(only=index)
+
+    def run_tests(self, only=None):
+        if self.runner.running:
+            return
+        tests = self.all_tests()
+        if not tests:
+            self.add_test()
+            tests = self.all_tests()
+        jobs = [(i, x["in"]) for i, x in enumerate(tests) if only is None or i == only]
+        self.save_timer.stop()
+        self.flush()
+        self.show_tests_tab()
+        self.run_time.clear()
+        for index, _ in jobs:
+            self.test_results.pop(index, None)
+            if index < len(self.tests_panel.cards):
+                self.tests_panel.cards[index].set_waiting()
+        task = self.task or {}
+        self.local_busy = self.t["running"]
+        self.update_controls()
+        self.runner.start(jobs, task.get("language", "python"), self.editor.text(), task.get("pip") or [],
+                          int(task.get("timeLimitMs") or 2000), self.t)
+
+    def on_test_step(self, text: str):
+        if self.runner.running:
+            self.local_busy = text
+            self.busy.setText(text)
+
+    def on_test_result(self, index: int, res: dict):
+        tests = self.all_tests()
+        if index >= len(tests):
+            return
+        task = self.task or {}
+        status = res.get("status", "")
+        expected = tests[index].get("out", "")
+        if status == "ok":
+            if expected.strip():
+                ok = compare_output(res.get("stdout", ""), expected, task.get("checker") or "tokens", task.get("abs"), task.get("rel"))
+                verdict, title = ("OK", self.t["test_ok"]) if ok else ("WA", self.t["test_wa"])
+            else:
+                verdict, title = "", ""
+        else:
+            verdict = {"re": "RE", "tle": "TLE", "ce": "CE", "ole": "OLE"}.get(status, "!")
+            title = self.t.get(f"test_{status}", self.t["run_failed"])
+        self.test_results[index] = (verdict, title, res)
+        if index < len(self.tests_panel.cards):
+            self.tests_panel.cards[index].set_result(verdict, title, res)
+
+    def on_tests_finished(self):
+        self.local_busy = ""
+        results = list(self.test_results.values())
+        passed = sum(1 for v, _, _ in results if v == "OK")
+        checked = sum(1 for v, _, _ in results if v)
+        self.run_time.setText(self.t["tests_passed"].format(passed=passed, total=checked) if checked else "")
+        self.update_controls()
 
     def submit(self):
         if self.submit_btn.isEnabled() and self.submit_btn.isVisible():
@@ -719,7 +898,10 @@ class MainWindow(QMainWindow):
             self.send("submit")
 
     def stop(self):
-        self.send("stop")
+        if self.runner.running:
+            self.runner.stop()
+        else:
+            self.send("stop")
 
     def next_task(self):
         if (self.status or {}).get("next"):
@@ -769,19 +951,48 @@ class MainWindow(QMainWindow):
         if d.exec():
             self.editor.go_to_line(d.intValue() - 1)
 
+    def make_dock(self, name: str, widget) -> QDockWidget:
+        dock = QDockWidget(self.work)
+        dock.setObjectName(name)
+        dock.setWidget(widget)
+        dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+            | QDockWidget.DockWidgetFeature.DockWidgetClosable
+        )
+        return dock
+
+    def place_docks(self):
+        """Расположение по умолчанию: курсы слева, тесты и результат вкладками справа."""
+        work, left, right = self.work, Qt.DockWidgetArea.LeftDockWidgetArea, Qt.DockWidgetArea.RightDockWidgetArea
+        for dock, area in ((self.sidebar_dock, left), (self.tests_dock, right), (self.result_dock, right)):
+            dock.setFloating(False)
+            work.addDockWidget(area, dock)
+            dock.show()
+        work.tabifyDockWidget(self.tests_dock, self.result_dock)
+        work.resizeDocks([self.sidebar_dock, self.tests_dock], [230, 420], Qt.Orientation.Horizontal)
+        self.tests_wanted = None
+        if hasattr(self, "runner"):  # при первой сборке окна кнопок ещё нет
+            self.update_controls()
+        (self.tests_dock if self.local_tests() else self.result_dock).raise_()
+
     def toggle_grid(self):
-        self.sidebar.setVisible(not self.sidebar.isVisible())
+        self.sidebar_dock.setVisible(not self.sidebar_dock.isVisible())
 
     def toggle_output(self):
-        self.bottom.setVisible(not self.bottom.isVisible())
+        shown = self.tests_dock.isVisible() or self.result_dock.isVisible()
+        self.result_dock.setVisible(not shown)
+        self.tests_dock.setVisible(not shown and self.local_tests())
 
     def show_output(self):
-        if not self.bottom.isVisible():
-            self.bottom.show()
+        self.show_result_tab()
 
     def show_result_tab(self):
-        self.result_tab.setChecked(True)
-        self.output_stack.setCurrentIndex(0)
+        self.result_dock.show()
+        self.result_dock.raise_()
+
+    def show_tests_tab(self):
+        self.tests_dock.show()
+        self.tests_dock.raise_()
 
     def zoom_in(self):
         self.editor.zoomIn(1)
@@ -802,7 +1013,9 @@ class MainWindow(QMainWindow):
     # --- сетка и результат ---
 
     def rebuild_grid(self):
-        self.sidebar.show_tree(self.state.get("tree") or {}, self.key, self.t, palette(self.theme))
+        tree = self.state.get("tree") or {}
+        self.sidebar.show_tree(tree, self.key, self.t, palette(self.theme))
+        self.task_tabs.show_row(tree, self.key, palette(self.theme), self.t)
 
     def render_status(self):
         s = self.status
@@ -812,8 +1025,9 @@ class MainWindow(QMainWindow):
         had_result = self.status_sig is not None
         self.status_sig = sig
         self.run_time.setText(self.result_panel.show_status(s, self.t, palette(self.theme)))
-        if had_result and s and (s.get("result") or s.get("run")):
+        if had_result and s and (s.get("result") or s.get("run") or s.get("tests")):
             self.show_output()
+            self.show_result_tab()
 
     # --- справка ---
 
@@ -851,10 +1065,12 @@ class MainWindow(QMainWindow):
 
     def restore_layout(self):
         s = self.settings
-        for key, restore in (("geometry", self.restoreGeometry), ("split", self.split.restoreState), ("vsplit", self.vsplit.restoreState)):
-            value = s.value(key)
-            if value is not None:
-                restore(value)
+        value = s.value("geometry")
+        if value is not None:
+            self.restoreGeometry(value)
+        value = s.value("docks")
+        if value is not None:
+            self.work.restoreState(value, DOCKS_VERSION)
         zoom = s.value("zoom")
         if zoom is not None:
             self.editor.set_zoom(int(zoom))
@@ -871,7 +1087,6 @@ class MainWindow(QMainWindow):
         self.assist.close()
         s = self.settings
         s.setValue("geometry", self.saveGeometry())
-        s.setValue("split", self.split.saveState())
-        s.setValue("vsplit", self.vsplit.saveState())
+        s.setValue("docks", self.work.saveState(DOCKS_VERSION))
         s.setValue("zoom", self.editor.get_zoom())
         event.accept()

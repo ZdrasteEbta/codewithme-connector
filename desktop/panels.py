@@ -5,10 +5,10 @@ import json
 import re
 
 from PyQt6.QtCore import QByteArray, QSize, Qt, QTimer, QUrl
-from PyQt6.QtGui import QImage, QTextDocument
+from PyQt6.QtGui import QFontMetrics, QIcon, QImage, QTextDocument
 from PyQt6.QtWidgets import (
-    QFrame, QGridLayout, QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSizePolicy,
-    QTextBrowser, QVBoxLayout, QWidget,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
+    QTextBrowser, QVBoxLayout, QWidget, QWidgetAction,
 )
 
 from icons import done_mark, icon
@@ -107,83 +107,136 @@ class KeyButton(QPushButton):
         return QSize(self.layout().sizeHint().width(), 36)
 
 
+class ClickRow(QFrame):
+    """Строка, по которой можно щёлкнуть целиком."""
+
+    def __init__(self, on_click, name):
+        super().__init__()
+        self.setObjectName(name)
+        self.on_click = on_click
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.on_click()
+
+
+# Пока сайт старой версии не присылает язык курса, окно знает его само
+LANGUAGE_LABELS = {"python": "Python", "javascript": "JavaScript", "html-css": "HTML & CSS", "rust": "Rust"}
+LIBRARY_LANGUAGE = {
+    "dom": "javascript", "react": "javascript", "vue": "javascript", "nodejs": "javascript", "express": "javascript",
+    "canvas": "javascript", "phaser": "javascript", "macroquad": "rust",
+}
+
+
+class Picker(QPushButton):
+    """Выпадающий выбор: название и стрелка справа, по щелчку список."""
+
+    def __init__(self, text, arrow, big=False):
+        super().__init__()
+        self.setObjectName("picker")
+        self.setProperty("big", "true" if big else "false")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        box = QHBoxLayout(self)
+        box.setContentsMargins(12, 0, 10, 0)
+        box.setSpacing(6)
+        self.caption = QLabel(text)
+        self.caption.setObjectName("pickerText")
+        self.arrow = QLabel()
+        self.arrow.setPixmap(arrow)
+        for w in (self.caption, self.arrow):
+            w.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        box.addWidget(self.caption, 1)
+        box.addWidget(self.arrow)
+        self.setFixedHeight(40 if big else 36)
+        self.clicked.connect(self.open_menu)
+        self.menu = QMenu(self)
+
+    def open_menu(self):
+        self.menu.setMinimumWidth(self.width())
+        self.menu.exec(self.mapToGlobal(self.rect().bottomLeft()))
+
+
 class Sidebar(QScrollArea):
-    """Курсы и темы разложены по папкам, внутри темы квадраты задач."""
+    """Слева выбор языка, под ним выбор курса или библиотеки этого языка и темы курса с номерами."""
 
     def __init__(self, on_open, settings):
         super().__init__()
         self.on_open, self.settings = on_open, settings
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setMinimumWidth(200)
+        self.setMinimumWidth(190)
         self.host = QWidget()
         self.host.setObjectName("gridHost")
         self.box = QVBoxLayout(self.host)
-        self.box.setContentsMargins(10, 14, 10, 12)
-        self.box.setSpacing(4)
+        self.box.setContentsMargins(10, 12, 10, 12)
+        self.box.setSpacing(2)
         self.setWidget(self.host)
         self.tree, self.key, self.t, self.c = {}, None, None, None
         self.sig = None
-        self.cols = 0
         self.active_cell = None
         self.scrolled_to = None
-        try:
-            self.folders = json.loads(settings.value("folders", "{}"))
-        except (TypeError, ValueError):
-            self.folders = {}
 
-    def columns(self):
-        width = self.viewport().width() - 66
-        return max(3, (width + CELL_GAP) // (CELL_SIZE + CELL_GAP))
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if self.t and self.columns() != self.cols:
-            self.show_tree(self.tree, self.key, self.t, self.c, force=True)
-
-    def toggle(self, folder: str, is_open: bool):
-        self.folders[folder] = not is_open
-        self.settings.setValue("folders", json.dumps(self.folders))
-        self.show_tree(self.tree, self.key, self.t, self.c, force=True)
+    @staticmethod
+    def groups(courses: list) -> dict:
+        """Курсы по языкам: {язык: {'label', 'items'}}. Библиотека идёт под курсом своего языка."""
+        out = {}
+        for item in courses:
+            library = item.get("kind") == "library"
+            group = item.get("group") or (LIBRARY_LANGUAGE.get(item.get("id"), "python") if library else item.get("id", ""))
+            label = item.get("groupLabel") or LANGUAGE_LABELS.get(group) or item.get("title", "")
+            out.setdefault(group, {"label": label, "items": []})["items"].append(item)
+        return out
 
     def show_tree(self, tree, key, t, c, force=False):
         self.tree, self.key, self.t, self.c = tree, key, t, c
-        cols = self.columns()
-        sig = json.dumps([tree, key, cols, c["ink"], t["courses"]], sort_keys=True)
+        sig = json.dumps([tree, key, c["ink"], t["courses"]], sort_keys=True)
         if sig == self.sig and not force:
             return
-        self.sig, self.cols = sig, cols
+        self.sig = sig
         scroll = self.verticalScrollBar().value()
         clear_layout(self.box)
         self.active_cell = None
 
         courses = tree.get("courses") or []
         if tree and not courses:
-            courses = [{"id": "current", "title": tree.get("title", ""), "href": tree.get("href", ""), "kind": "course",
-                        "done": tree.get("done", 0), "total": tree.get("total", 0)}]
+            courses = [{"id": "current", "title": tree.get("title", ""), "href": tree.get("href", ""), "kind": "course"}]
         active = tree.get("href")
-        regular = [x for x in courses if x.get("kind") != "library"]
-        libraries = [x for x in courses if x.get("kind") == "library"]
-        if regular:
-            self.box.addWidget(self.section(t["courses"]))
-            for course in regular:
-                self.add_course(course, course.get("href") == active or len(courses) == 1)
-        if libraries:
-            has_active = any(x.get("href") == active for x in libraries)
-            is_open = self.folders.get("#libraries", has_active)
-            head = QWidget()
-            row = QHBoxLayout(head)
-            row.setContentsMargins(0, 8, 0, 2)
-            row.setSpacing(5)
-            toggle = lambda: self.toggle("#libraries", is_open)
-            row.addWidget(self.chevron(is_open, toggle))
-            label = ClickLabel(t["libraries"], toggle)
-            label.setObjectName("sideSection")
-            row.addWidget(label, 1)
-            self.box.addWidget(head)
-            if is_open:
-                for course in libraries:
-                    self.add_course(course, course.get("href") == active)
+        groups = self.groups(courses)
+        current = next((x for x in courses if x.get("href") == active), courses[0] if courses else None)
+        if current:
+            group_id = next(g for g, v in groups.items() if current in v["items"])
+            group = groups[group_id]
+            self.add_caption(t["pick_language"])
+            language = Picker(group["label"], icon("down", c["mute"], 12), big=True)
+            for gid, entry in groups.items():
+                main = next((x for x in entry["items"] if x.get("kind") != "library"), entry["items"][0])
+                action = language.menu.addAction(entry["label"])
+                action.setCheckable(True)
+                action.setChecked(gid == group_id)
+                action.triggered.connect(lambda _=False, h=main.get("href", ""), same=gid == group_id: same or self.on_open(h))
+            self.box.addWidget(language)
+            if len(group["items"]) > 1:
+                self.box.addSpacing(8)
+                self.add_caption(t["pick_course"])
+                course = Picker(current.get("title", ""), icon("down", c["mute"], 12))
+                regular = [x for x in group["items"] if x.get("kind") != "library"]
+                libraries = [x for x in group["items"] if x.get("kind") == "library"]
+                self.add_section(course.menu, t["main_course"])
+                for item in regular:
+                    self.add_choice(course.menu, item, current)
+                # Библиотеки по разделам, как на странице курса: «Данные», «GameDev», «Веб»…
+                sections = {}
+                for item in libraries:
+                    sections.setdefault(item.get("section") or t["libraries"].capitalize(), []).append(item)
+                for name, items in sections.items():
+                    self.add_section(course.menu, name)
+                    for item in items:
+                        self.add_choice(course.menu, item, current)
+                self.box.addWidget(course)
+            self.box.addSpacing(10)
+        for n, topic in enumerate(tree.get("rows", []), 1):
+            self.box.addWidget(self.make_topic(n, topic))
         self.box.addStretch(1)
 
         target = self.active_cell
@@ -193,146 +246,105 @@ class Sidebar(QScrollArea):
         else:
             QTimer.singleShot(0, lambda: self.verticalScrollBar().setValue(scroll))
 
-    def section(self, text):
+    def add_caption(self, text):
+        caption = QLabel(text)
+        caption.setObjectName("pickCaption")
+        self.box.addWidget(caption)
+        self.box.addSpacing(3)
+
+    @staticmethod
+    def add_section(menu, text):
+        """Подпись раздела в списке: обычный addSection в этой теме рисуется пустой чертой."""
         label = QLabel(text)
-        label.setObjectName("sideSection")
-        label.setContentsMargins(6, 0, 0, 2)
-        return label
+        label.setObjectName("menuSection")
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(label)
+        action.setEnabled(False)
+        menu.addAction(action)
 
-    def chevron(self, is_open, on_click, size=13):
-        label = ClickLabel("", on_click)
-        label.setPixmap(icon("down" if is_open else "right", self.c["mute"], size))
-        label.setFixedSize(size + 4, size + 4)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        return label
+    def add_choice(self, menu, item, current):
+        action = menu.addAction(item.get("title", ""))
+        action.setCheckable(True)
+        action.setChecked(item is current)
+        href = item.get("href", "")
+        action.triggered.connect(lambda _=False: item is current or self.on_open(href))
 
-    def picture(self, name, color, size):
-        label = QLabel()
-        label.setPixmap(icon(name, color, size))
-        label.setFixedSize(size, size)
-        return label
-
-    def count(self, done, total):
-        label = QLabel(f"{done} / {total}")
-        label.setObjectName("count")
-        label.setProperty("done", "true" if total and done >= total else "false")
-        return label
-
-    def add_course(self, course, active):
-        c = self.c
-        folder = "course:" + str(course.get("id"))
-        is_open = active and self.folders.get(folder, True)
-        toggle = (lambda: self.toggle(folder, is_open)) if active else (lambda: self.on_open(course.get("href", "")))
-        done, total = course.get("done", 0), course.get("total", 0)
-        head = QWidget()
-        row = QHBoxLayout(head)
-        row.setContentsMargins(2, 3, 4, 3)
-        row.setSpacing(6)
-        row.addWidget(self.chevron(is_open, toggle))
-        color = c["lime"] if active else c["done"] if total and done >= total else c["mute"]
-        row.addWidget(self.picture("folder", color, 16))
-        title = ClickLabel(course.get("title", ""), toggle)
-        title.setObjectName("courseTitle")
-        title.setProperty("active", "true" if active else "false")
-        title.setWordWrap(True)
-        row.addWidget(title, 1)
-        row.addWidget(self.count(done, total))
-        self.box.addWidget(head)
-        if not is_open:
-            return
-
-        bar = QProgressBar()
-        bar.setObjectName("courseBar")
-        bar.setTextVisible(False)
-        bar.setFixedHeight(4)
-        bar.setRange(0, max(1, total))
-        bar.setValue(min(done, total))
-        bar_box = QHBoxLayout()
-        bar_box.setContentsMargins(8, 4, 4, 8)
-        bar_box.addWidget(bar)
-        self.box.addLayout(bar_box)
-
-        rows = self.tree.get("rows", [])
-        for topic in rows:
-            self.box.addWidget(self.make_topic(topic))
-        if rows and not rows[-1].get("done"):
-            hint = QWidget()
-            hint_row = QHBoxLayout(hint)
-            hint_row.setContentsMargins(24, 6, 8, 6)
-            hint_row.setSpacing(8)
-            hint_row.addWidget(self.picture("lock", c["mute"], 14), 0, Qt.AlignmentFlag.AlignTop)
-            text = QLabel(self.t["lock_hint"])
-            text.setObjectName("lockHint")
-            text.setWordWrap(True)
-            hint_row.addWidget(text, 1)
-            self.box.addWidget(hint)
-
-    def make_topic(self, topic):
-        c = self.c
-        cells = topic.get("cells")
-        has_active = any(x.get("key") == self.key for x in cells or [])
-        folder = "topic:" + str(topic.get("id"))
-        is_open = self.folders.get(folder, has_active or not topic.get("done"))
-        frame = QFrame()
-        frame.setObjectName("row")
-        frame.setProperty("state", "current" if has_active or (topic.get("current") and not topic.get("done")) else "")
-        outer = QVBoxLayout(frame)
-        outer.setContentsMargins(10, 8, 10, 10)
-        outer.setSpacing(9)
-        head = QHBoxLayout()
-        head.setSpacing(6)
-        head.addWidget(self.chevron(is_open, lambda: self.toggle(folder, is_open), 12))
-        head.addWidget(self.picture("folder", c["done"] if topic.get("done") else c["lime"], 15))
+    def make_topic(self, n, topic):
+        """Тема — одна строка с номером. Её задачи открываются вкладками A, B, C над редактором."""
+        cells = topic.get("cells") or []
+        current = any(x.get("key") == self.key for x in cells) or (bool(topic.get("current")) and not self.key_in_tree())
         href = topic.get("href", "")
-
-        def open_topic():
-            if not is_open:
-                self.folders[folder] = True
-                self.settings.setValue("folders", json.dumps(self.folders))
-                self.sig = None
-            self.on_open(href)
-
-        title = ClickLabel(topic.get("title", ""), open_topic)
-        title.setObjectName("rowHead")
+        row = ClickRow(lambda: self.on_open(href), "topicItem")
+        state = "current" if current else "done" if topic.get("done") else "locked" if topic.get("cells") is None else ""
+        row.setProperty("state", state)
+        box = QVBoxLayout(row)
+        box.setContentsMargins(12, 7, 10, 7)
+        box.setSpacing(3)
+        title = QLabel(f"{n}. {topic.get('title', '')}")
+        title.setObjectName("topicText")
+        title.setProperty("state", state)
         title.setWordWrap(True)
-        head.addWidget(title, 1)
-        if cells:
-            head.addWidget(self.count(sum(1 for x in cells if x.get("done")), len(cells)))
-        outer.addLayout(head)
-        if is_open and cells:
-            grid = QGridLayout()
-            grid.setSpacing(CELL_GAP)
-            grid.setContentsMargins(0, 0, 0, 0)
-            grid.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-            for i, cell in enumerate(cells):
-                grid.addWidget(self.make_cell(cell), i // self.cols, i % self.cols)
-            outer.addLayout(grid)
-        elif is_open and topic.get("hint"):
+        box.addWidget(title)
+        if current and not cells and topic.get("hint"):
             hint = QLabel(topic["hint"])
             hint.setObjectName("lockHint")
             hint.setWordWrap(True)
-            outer.addWidget(hint)
-        wrapper = QWidget()
-        side = QHBoxLayout(wrapper)
-        side.setContentsMargins(12, 0, 0, 0)
-        side.addWidget(frame)
-        return wrapper
+            box.addWidget(hint)
+        if current:
+            self.active_cell = row
+        return row
 
-    def make_cell(self, cell):
-        b = QPushButton(str(cell.get("label", "")))
-        b.setObjectName("cell")
-        b.setFixedSize(CELL_SIZE, CELL_SIZE)
-        b.setCursor(Qt.CursorShape.PointingHandCursor)
-        active = cell.get("key") == self.key
-        done = bool(cell.get("done"))
-        b.setProperty("state", "doneactive" if active and done else "active" if active else "done" if done else "")
-        if cell.get("title"):
-            b.setToolTip(cell["title"])
-        href = cell.get("href", "")
-        b.clicked.connect(lambda _=False, h=href: self.on_open(h))
-        if active:
-            self.active_cell = b
-        return b
+    def key_in_tree(self) -> bool:
+        return any(x.get("key") == self.key for row in self.tree.get("rows", []) for x in row.get("cells") or [])
+
+
+class TaskTabs(QWidget):
+    """Задачи открытой темы вкладками над редактором: A, B, C."""
+
+    def __init__(self, on_open):
+        super().__init__()
+        self.on_open = on_open
+        self.row = QHBoxLayout(self)
+        self.row.setContentsMargins(0, 0, 0, 0)
+        self.row.setSpacing(2)
+        self.sig = None
+
+    @staticmethod
+    def current_row(tree: dict, key):
+        rows = tree.get("rows", [])
+        for row in rows:
+            if any(x.get("key") == key for x in row.get("cells") or []):
+                return row
+        return next((r for r in rows if r.get("current")), None)
+
+    def show_row(self, tree: dict, key, c: dict, t: dict):
+        row = self.current_row(tree, key)
+        sig = json.dumps([row, key, c["ink"]], sort_keys=True)
+        if sig == self.sig:
+            return
+        self.sig = sig
+        clear_layout(self.row)
+        cells = (row or {}).get("cells") or []
+        for cell in cells:
+            label = str(cell.get("label", ""))
+            title = cell.get("title") or ""
+            text = f"{label}. {title}" if title else label
+            b = QPushButton(QFontMetrics(self.font()).elidedText(text, Qt.TextElideMode.ElideRight, 190))
+            b.setObjectName("taskTab")
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            active = cell.get("key") == key
+            b.setProperty("active", "true" if active else "false")
+            if cell.get("done"):
+                b.setIcon(QIcon(icon("check", c["done"], 12)))
+            b.setToolTip(title or text)
+            href = cell.get("href", "")
+            b.clicked.connect(lambda _=False, h=href: self.on_open(h))
+            self.row.addWidget(b)
+        if row and not cells and row.get("hint"):
+            hint = QLabel(row["hint"])
+            hint.setObjectName("muted")
+            self.row.addWidget(hint)
+        self.row.addStretch(1)
 
 
 class ResultPanel(QWidget):

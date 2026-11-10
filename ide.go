@@ -315,7 +315,7 @@ func (s *Server) serveApp(w http.ResponseWriter, r *http.Request) {
 			Npm      []string `json:"npm"`
 			Fresh    bool     `json:"fresh"` // первое нажатие кнопки: окно видит, что на диске пакетов нет
 		}
-		if !readJSON(r, &req) || (req.Language != "python" && req.Language != "node") ||
+		if !readJSON(r, &req) || (req.Language != "python" && req.Language != "node" && req.Language != "rust") ||
 			!validPackages(req.Pip) || !validNpmPackages(req.Npm) {
 			reply(400, map[string]any{"error": "bad-request"})
 			return
@@ -328,6 +328,31 @@ func (s *Server) serveApp(w http.ResponseWriter, r *http.Request) {
 			s.inst.Forget(req.Language, pkgs)
 		}
 		reply(200, s.inst.Ensure(req.Language, pkgs))
+
+	case r.Method == http.MethodPost && r.URL.Path == "/app/run":
+		// Тесты справа от редактора: программа ученика с его вводом, без окна игры и без проверочного кода
+		var req RunRequest
+		ok := readJSON(r, &req) && runIDRE.MatchString(req.RunID) && req.TimeLimitMs >= 1 && req.TimeLimitMs <= 60*1000 &&
+			req.OutputLimitBytes >= 1 && req.OutputLimitBytes <= maxOutput &&
+			(req.Language == "python" || req.Language == "rust" || req.Language == "javascript" || req.Language == "node")
+		if !ok {
+			reply(400, map[string]any{"error": "bad-request"})
+			return
+		}
+		req.Window, req.Images, req.Check, req.Tests, req.Crates = false, false, nil, nil, nil
+		req.Label = "тест в IDE"
+		res := s.ws.Run(req, s.runs)
+		reply(200, res)
+
+	case r.Method == http.MethodPost && r.URL.Path == "/app/cancel":
+		var req struct {
+			RunID string `json:"runId"`
+		}
+		if !readJSON(r, &req) || !runIDRE.MatchString(req.RunID) {
+			reply(400, map[string]any{"error": "bad-request"})
+			return
+		}
+		reply(200, map[string]any{"cancelled": s.runs.Cancel(req.RunID)})
 
 	case r.Method == http.MethodPost && r.URL.Path == "/app/open-site":
 		openBrowser(s.siteBase)
