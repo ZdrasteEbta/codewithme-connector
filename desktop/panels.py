@@ -5,7 +5,7 @@ import json
 import re
 import time
 
-from PyQt6.QtCore import QByteArray, QSize, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QByteArray, QEvent, QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QImage, QTextCharFormat, QTextCursor, QTextDocument
 from PyQt6.QtWidgets import (
     QFrame, QGridLayout, QHBoxLayout, QLabel, QMenu, QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy,
@@ -547,8 +547,54 @@ class InputBox(QPlainTextEdit):
         super().keyPressEvent(e)
 
 
+class VerdictNotification(QFrame):
+    """Неблокирующий результат отправки внутри окна."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setObjectName("verdictNotification")
+        box = QHBoxLayout(self)
+        box.setContentsMargins(16, 12, 10, 12)
+        self.message = QLabel()
+        self.message.setTextFormat(Qt.TextFormat.PlainText)
+        self.message.setWordWrap(True)
+        self.close_btn = button("×", "quiet")
+        self.close_btn.clicked.connect(self.hide)
+        box.addWidget(self.message, 1)
+        box.addWidget(self.close_btn)
+        self.timer = QTimer(self, singleShot=True, interval=5000, timeout=self.hide)
+        parent.installEventFilter(self)
+        self.hide()
+
+    def show_verdict(self, text: str, accepted: bool, c: dict):
+        color = c["done"] if accepted else c["rose"]
+        background = c["wantbg"] if accepted else c["rosebg"]
+        border = c["wantline"] if accepted else c["roseline"]
+        self.setStyleSheet(
+            f"QFrame#verdictNotification {{ background: {background}; border: 1px solid {border}; border-radius: 10px; }}"
+            f"QFrame#verdictNotification QLabel {{ color: {color}; background: transparent; border: none; font-weight: 700; }}"
+            f"QFrame#verdictNotification QPushButton {{ color: {color}; }}"
+        )
+        self.message.setText(text)
+        self.setMaximumWidth(max(160, min(560, self.parentWidget().width() - 32)))
+        self.adjustSize()
+        self.move(max(0, (self.parentWidget().width() - self.width()) // 2), 16)
+        self.show()
+        self.raise_()
+        self.timer.start()
+
+    def eventFilter(self, watched, event):
+        if watched is self.parentWidget() and event.type() == QEvent.Type.Resize:
+            self.setMaximumWidth(max(160, min(560, watched.width() - 32)))
+            self.adjustSize()
+            self.move(max(0, (watched.width() - self.width()) // 2), 16)
+        return super().eventFilter(watched, event)
+
+
 class ResultPanel(QWidget):
     """Вердикт, тесты, сравнение ответов и вывод программы."""
+
+    output_added = pyqtSignal()
 
     def __init__(self, on_next, on_link):
         super().__init__()
@@ -595,6 +641,17 @@ class ResultPanel(QWidget):
         self.diff_grid.setHorizontalSpacing(8)
         self.diff_grid.setVerticalSpacing(5)
         root.addWidget(self.diff_host)
+
+        self.submission_tests = QScrollArea()
+        self.submission_tests.setWidgetResizable(True)
+        self.submission_tests.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        tests_host = QWidget()
+        tests_host.setObjectName("testsHost")
+        self.submission_rows = QVBoxLayout(tests_host)
+        self.submission_rows.setContentsMargins(10, 10, 10, 12)
+        self.submission_rows.setSpacing(8)
+        self.submission_tests.setWidget(tests_host)
+        self.submission_tests.hide()
 
         self.browser = QTextBrowser()
         self.browser.setOpenLinks(False)
@@ -665,6 +722,7 @@ class ResultPanel(QWidget):
         cursor.insertText(text.replace("\r\n", "\n"), fmt)
         bar = self.log_box.verticalScrollBar()
         bar.setValue(bar.maximum())
+        self.output_added.emit()
 
     def log(self, title: str, body: str = "", error: str = "", c=None):
         """Добавляет запись в журнал: заголовок, вывод программы и ошибки красным."""
@@ -678,6 +736,38 @@ class ResultPanel(QWidget):
         self.log_box.appendHtml("".join(parts))
         bar = self.log_box.verticalScrollBar()
         bar.setValue(bar.maximum())
+        self.output_added.emit()
+
+    def show_submission_tests(self, tests, t, c):
+        clear_layout(self.submission_rows)
+        labels = {
+            "OK": ("✅", t["verdict_ok"]),
+            "WA": ("❌", t["verdict_wa"]),
+            "RE": ("⚠", t["verdict_re"]),
+            "TLE": ("⚠", t["verdict_tle"]),
+            "OLE": ("⚠", t["verdict_ole"]),
+            "CE": ("⚠", t["verdict_ce"]),
+            "skipped": ("⏭", t["verdict_skipped"]),
+            "—": ("⏭", t["verdict_skipped"]),
+            "cancelled": ("⚠", t["verdict_cancelled"]),
+            "env-error": ("⚠", t["verdict_env_error"]),
+        }
+        for i, test in enumerate(tests or []):
+            verdict = test.get("verdict", "skipped")
+            symbol, label = labels.get(verdict, ("⚠", t["verdict_error"]))
+            name = t["submit_test"] if test.get("sample") else t["submit_hidden_test"]
+            text = f'{name.format(n=test.get("n", i + 1))} — {symbol} {label}'
+            if test.get("timeMs") is not None:
+                text += f' · {t["time_ms"].format(ms=test["timeMs"])}'
+            row = QLabel(text)
+            row.setTextFormat(Qt.TextFormat.PlainText)
+            row.setWordWrap(True)
+            row.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            row.setContentsMargins(12, 10, 12, 10)
+            color = {"OK": c["done"], "skipped": c["mute"], "—": c["mute"]}.get(verdict, c["rose"])
+            row.setStyleSheet(f'color: {color}; background: {c["code"]}; border-radius: 8px;')
+            self.submission_rows.addWidget(row)
+        self.submission_rows.addStretch(1)
 
     def fill_verdict(self, s, t, c):
         result = s.get("result")
@@ -741,7 +831,7 @@ class ResultPanel(QWidget):
             self.diff_grid.addWidget(box, 1, col)
             self.diff_grid.setColumnStretch(col, 1)
 
-    def show_status(self, s, t, c):
+    def show_status(self, s, t, c, images_only=False):
         s = s or {}
         self.fill_verdict(s, t, c)
         self.fill_diff(s.get("diff"))
@@ -759,28 +849,29 @@ class ResultPanel(QWidget):
         document = self.browser.document()
         document.setDefaultStyleSheet(f"a {{ color: {c['lime']}; }}")
         parts = []
-        if s.get("error"):
+        if not images_only and s.get("error"):
             parts.append(box(t["stderr"], link_errors(s["error"][:MAX_OUTPUT]), c["rose"], c["rosebg"]))
         run = s.get("run")
         if run:
-            if run.get("label"):
-                tone = c["rose"] if run.get("tone") == "fail" else c["mute"]
-                parts.append(f'<div style="color:{tone};font-weight:700;">{esc(run["label"])}</div>')
-            out = run.get("stdout") or ""
-            if out:
-                parts.append(box(t["stdout"], link_errors(out[:MAX_OUTPUT])))
-            elif not run.get("stderr"):
-                parts.append(f'<div style="color:{c["mute"]};">{esc(t["no_output"])}</div>')
-            if run.get("stderr"):
-                parts.append(box(t["stderr"], link_errors(run["stderr"][:MAX_OUTPUT]), c["rose"], c["rosebg"]))
+            if not images_only:
+                if run.get("label"):
+                    tone = c["rose"] if run.get("tone") == "fail" else c["mute"]
+                    parts.append(f'<div style="color:{tone};font-weight:700;">{esc(run["label"])}</div>')
+                out = run.get("stdout") or ""
+                if out:
+                    parts.append(box(t["stdout"], link_errors(out[:MAX_OUTPUT])))
+                elif not run.get("stderr"):
+                    parts.append(f'<div style="color:{c["mute"]};">{esc(t["no_output"])}</div>')
+                if run.get("stderr"):
+                    parts.append(box(t["stderr"], link_errors(run["stderr"][:MAX_OUTPUT]), c["rose"], c["rosebg"]))
             for i, data in enumerate(run.get("images") or []):
                 image = QImage.fromData(QByteArray(base64.b64decode(data.split(",", 1)[-1])))
                 if not image.isNull():
                     document.addResource(QTextDocument.ResourceType.ImageResource, QUrl(f"cwmimg:{i}"), image)
                     parts.append(f'<div><img src="cwmimg:{i}" width="{min(image.width(), 520)}"></div>')
-        if s.get("note"):
+        if not images_only and s.get("note"):
             parts.append(f'<div style="color:{c["mute"]};font-size:12px;">{esc(s["note"])}</div>')
-        if not parts and not s.get("result"):
+        if not images_only and not parts and not s.get("result"):
             parts.append(f'<div style="color:{c["mute"]};">{esc(t["output_empty"])}</div>')
         self.browser.setHtml("".join(parts))
         return (run or {}).get("time") or ""
