@@ -2,6 +2,19 @@
 from PyQt6.QtCore import QLocale
 
 RU = {
+    "console_tab": "Консоль", "status_tab": "Статус", "status_empty": "Здесь появится вердикт сайта после отправки решения.", "submit_test": "Тест #{n}", "submit_hidden_test": "Скрытый тест #{n}",
+    "submit_console_test": "Тест {n}", "submit_console_hidden_test": "Скрытый тест {n}",
+    "verdict_ok": "пройден", "verdict_wa": "неверный ответ", "verdict_re": "ошибка выполнения",
+    "verdict_tle": "превышено время", "verdict_ole": "слишком большой вывод", "verdict_ce": "ошибка компиляции",
+    "verdict_skipped": "не запускался", "verdict_cancelled": "отменено", "verdict_env_error": "ошибка окружения",
+    "verdict_error": "ошибка",
+    "submit_sending": "Отправка решения...", "submit_stopped": "Проверка остановлена на тесте #{n}",
+    "submit_timeout": "нет ответа от сайта",
+    "submit_accepted": "✅ Задача решена!", "submit_rejected": "❌ Не решено: {passed}/{total} тестов пройдено",
+    "submit_compile_error": "❌ Ошибка компиляции", "submit_send_error": "❌ Ошибка отправки",
+    "submit_summary": "Итог: {passed}/{total} — {verdict}", "submit_unsolved": "❌ Задача НЕ решена",
+    "submit_close": "Закрыть уведомление", "submit_error_log": "Ошибка отправки: {code}{message}",
+    "submit_examples": "Примеры и свои тесты", "submit_results": "Результаты отправки",
     "tests_tab": "Тесты", "test_n": "Тест {n}", "test_site": "с сайта", "test_own": "свой", "test_add": "+ Добавить тест",
     "test_run_one": "Запустить этот тест", "test_delete": "Удалить тест", "test_input": "Входные данные", "test_expected": "Выходные данные",
     "test_run_btn": "Запустить", "test_reset": "Как на сайте", "test_reset_tip": "Вернуть тест, как он есть на сайте", "pick_language": "Язык", "run_file": "Запустить файл", "file_stdin": "Ввод для программы: можно написать заранее или ввести, когда она спросит", "file_input_live": "Программа работает: напишите ввод и нажмите Enter (Shift+Enter — новая строка, Ctrl+D — конец ввода)", "file_done": "Готово", "file_stopped": "Остановлено", "log_run_file": "Запуск {name}", "file_exit": "Программа завершилась с ошибкой", "new_file": "Новый файл", "new_folder": "Новая папка", "open_file": "Открыть файл…", "open_dir": "Открыть папку…", "open_file_item": "Открыть", "save_as": "Сохранить как…", "close_tab": "Закрыть вкладку", "name_prompt": "Название:", "bad_name": "В названии есть недопустимые символы.", "file_exists": "Файл или папка с таким названием уже есть.", "rename": "Переименовать", "delete": "Удалить", "delete_confirm": "Переместить «{name}» в корзину?", "delete_failed": "Не удалось переместить в корзину.", "reveal": "Показать в проводнике Windows", "explorer": "Файлы", "unsaved_text": "В «{name}» есть несохранённые изменения. Сохранить?", "unsaved_many": "Есть несохранённые файлы: {names}. Сохранить их?", "dont_save": "Не сохранять", "cannot_open": "Не удалось открыть файл", "file_big": "Файл слишком большой для редактора.", "file_binary": "Это не текстовый файл.", "cannot_save": "Не удалось сохранить файл", "toggle_tests": "Тесты", "debug_log": "Вывод программы", "console_hide": "Скрыть", "debug_clear": "Очистить", "log_test": "Тест {n}", "log_install": "Установка", "log_site_run": "Запуск на сайте", "main_course": "Основной курс", "tests_restore": "Вернуть тесты с сайта ({n})", "reset_panels": "Вернуть панели на место", "pick_course": "Курс", "test_edited": "с сайта, изменён", "test_delete_btn": "Удалить",
@@ -48,6 +61,19 @@ RU = {
 }
 
 EN = {
+    "console_tab": "Console", "status_tab": "Status", "status_empty": "The website's verdict appears here after you submit a solution.", "submit_test": "Test #{n}", "submit_hidden_test": "Hidden test #{n}",
+    "submit_console_test": "Test {n}", "submit_console_hidden_test": "Hidden test {n}",
+    "verdict_ok": "passed", "verdict_wa": "wrong answer", "verdict_re": "runtime error",
+    "verdict_tle": "time limit exceeded", "verdict_ole": "output limit exceeded", "verdict_ce": "compilation error",
+    "verdict_skipped": "not run", "verdict_cancelled": "cancelled", "verdict_env_error": "environment error",
+    "verdict_error": "error",
+    "submit_sending": "Submitting solution...", "submit_stopped": "Checking stopped at test #{n}",
+    "submit_timeout": "no response from the website",
+    "submit_accepted": "✅ Task solved!", "submit_rejected": "❌ Not solved: {passed}/{total} tests passed",
+    "submit_compile_error": "❌ Compilation error", "submit_send_error": "❌ Submission error",
+    "submit_summary": "Result: {passed}/{total} — {verdict}", "submit_unsolved": "❌ Task NOT solved",
+    "submit_close": "Close notification", "submit_error_log": "Submission error: {code}{message}",
+    "submit_examples": "Examples and custom tests", "submit_results": "Submission results",
     "tests_tab": "Tests", "test_n": "Test {n}", "test_site": "from the website", "test_own": "yours", "test_add": "+ Add test",
     "test_run_one": "Run this test", "test_delete": "Delete test", "test_input": "Input", "test_expected": "Output",
     "test_run_btn": "Run", "test_reset": "Restore", "test_reset_tip": "Put the test back as it is on the website", "pick_language": "Language", "run_file": "Run file", "file_stdin": "Program input: type it in advance or when the program asks", "file_input_live": "The program is running: type input and press Enter (Shift+Enter for a new line, Ctrl+D to end input)", "file_done": "Done", "file_stopped": "Stopped", "log_run_file": "Running {name}", "file_exit": "The program ended with an error", "new_file": "New file", "new_folder": "New folder", "open_file": "Open file…", "open_dir": "Open folder…", "open_file_item": "Open", "save_as": "Save as…", "close_tab": "Close tab", "name_prompt": "Name:", "bad_name": "The name has characters that are not allowed.", "file_exists": "A file or folder with this name already exists.", "rename": "Rename", "delete": "Delete", "delete_confirm": "Move «{name}» to the trash?", "delete_failed": "Could not move it to the trash.", "reveal": "Show in file manager", "explorer": "Files", "unsaved_text": "«{name}» has unsaved changes. Save them?", "unsaved_many": "These files have unsaved changes: {names}. Save them?", "dont_save": "Don't save", "cannot_open": "Could not open the file", "file_big": "The file is too big for the editor.", "file_binary": "This is not a text file.", "cannot_save": "Could not save the file", "toggle_tests": "Tests", "debug_log": "Program output", "console_hide": "Hide", "debug_clear": "Clear", "log_test": "Test {n}", "log_install": "Installing", "log_site_run": "Run on the website", "main_course": "Main course", "tests_restore": "Bring back website tests ({n})", "reset_panels": "Reset panel layout", "pick_course": "Course", "test_edited": "from the website, edited", "test_delete_btn": "Delete",
@@ -94,6 +120,19 @@ EN = {
 }
 
 TG = {
+    "console_tab": "Консол", "status_tab": "Ҳолат", "status_empty": "Пас аз фиристодани ҳал ҳукми сайт дар ин ҷо пайдо мешавад.", "submit_test": "Тести #{n}", "submit_hidden_test": "Тести пинҳонии #{n}",
+    "submit_console_test": "Тести {n}", "submit_console_hidden_test": "Тести пинҳонии {n}",
+    "verdict_ok": "гузашт", "verdict_wa": "ҷавоби нодуруст", "verdict_re": "хатои иҷро",
+    "verdict_tle": "вақт гузашт", "verdict_ole": "хуруҷ аз ҳад калон", "verdict_ce": "хатои компилятсия",
+    "verdict_skipped": "иҷро нашуд", "verdict_cancelled": "бекор шуд", "verdict_env_error": "хатои муҳит",
+    "verdict_error": "хато",
+    "submit_sending": "Ҳал фиристода мешавад...", "submit_stopped": "Санҷиш дар тести #{n} қатъ шуд",
+    "submit_timeout": "аз сайт ҷавоб нест",
+    "submit_accepted": "✅ Масъала ҳал шуд!", "submit_rejected": "❌ Ҳал нашуд: {passed}/{total} тест гузашт",
+    "submit_compile_error": "❌ Хатои компилятсия", "submit_send_error": "❌ Хатои фиристодан",
+    "submit_summary": "Натиҷа: {passed}/{total} — {verdict}", "submit_unsolved": "❌ Масъала ҳал НАШУД",
+    "submit_close": "Пӯшидани огоҳӣ", "submit_error_log": "Хатои фиристодан: {code}{message}",
+    "submit_examples": "Мисолҳо ва тестҳои худӣ", "submit_results": "Натиҷаи фиристодан",
     "tests_tab": "Тестҳо", "test_n": "Тести {n}", "test_site": "аз сайт", "test_own": "худӣ", "test_add": "+ Илова кардани тест",
     "test_run_one": "Иҷрои ин тест", "test_delete": "Нест кардани тест", "test_input": "Маълумоти воридотӣ", "test_expected": "Маълумоти хуруҷӣ",
     "test_run_btn": "Иҷро", "test_reset": "Мисли сайт", "test_reset_tip": "Тестро мисли сайт баргардонед", "pick_language": "Забон", "run_file": "Иҷрои файл", "file_stdin": "Вуруд барои барнома: пешакӣ нависед ё вақте ки барнома пурсад", "file_input_live": "Барнома кор мекунад: вурудро нависед ва Enter-ро пахш кунед (Shift+Enter — сатри нав, Ctrl+D — охири вуруд)", "file_done": "Тайёр", "file_stopped": "Қатъ шуд", "log_run_file": "Иҷрои {name}", "file_exit": "Барнома бо хато анҷом ёфт", "new_file": "Файли нав", "new_folder": "Папкаи нав", "open_file": "Кушодани файл…", "open_dir": "Кушодани папка…", "open_file_item": "Кушодан", "save_as": "Захира ҳамчун…", "close_tab": "Пӯшидани варақа", "name_prompt": "Ном:", "bad_name": "Дар ном аломатҳои манъшуда ҳаст.", "file_exists": "Файл ё папка бо ҳамин ном аллакай ҳаст.", "rename": "Иваз кардани ном", "delete": "Нест кардан", "delete_confirm": "«{name}»-ро ба сабад гузаронем?", "delete_failed": "Ба сабад гузаронида нашуд.", "reveal": "Нишон додан дар Explorer", "explorer": "Файлҳо", "unsaved_text": "Дар «{name}» тағйироти захиранашуда ҳаст. Захира кунем?", "unsaved_many": "Файлҳои захиранашуда: {names}. Захира кунем?", "dont_save": "Захира накардан", "cannot_open": "Файл кушода нашуд", "file_big": "Файл барои муҳаррир хеле калон аст.", "file_binary": "Ин файли матнӣ нест.", "cannot_save": "Файл захира нашуд", "toggle_tests": "Тестҳо", "debug_log": "Натиҷаи барнома", "console_hide": "Пинҳон кардан", "debug_clear": "Тоза кардан", "log_test": "Тести {n}", "log_install": "Насб", "log_site_run": "Иҷро дар сайт", "main_course": "Курси асосӣ", "tests_restore": "Баргардонидани тестҳои сайт ({n})", "reset_panels": "Панелҳоро ба ҷояш баргардонидан", "pick_course": "Курс", "test_edited": "аз сайт, тағйирёфта", "test_delete_btn": "Нест кардан",

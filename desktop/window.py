@@ -2,12 +2,13 @@
 import json
 import os
 import sys
+import time
 
 from PyQt6.QtCore import QSettings, Qt, QTimer, QUrl
 from PyQt6.QtGui import QAction, QDesktopServices, QIcon, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
-    QDockWidget, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QSplitter, QStackedWidget, QTabBar, QTabWidget,
+    QDockWidget, QFileDialog, QMainWindow, QMessageBox, QSizePolicy, QStackedWidget, QTabBar, QTabWidget,
     QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
@@ -15,7 +16,7 @@ from assist import Assistant
 from backend import Api, StatePoller
 from editor import CodeEditor
 from icons import icon, mascot
-from panels import DocTabs, KeyButton, ResultPanel, Sidebar, TabScroll, TaskTabs, button
+from panels import DocTabs, KeyButton, ResultPanel, Sidebar, TabScroll, TaskTabs, VerdictNotification, button
 from tests import TestRunner, TestsPanel, compare_output
 from files import Explorer, language_for, read_text, run_language, same_path, write_text
 from texts import TEXTS, system_locale
@@ -167,6 +168,11 @@ class MainWindow(QMainWindow):
         self.key = None
         self.status = None
         self.status_sig = None
+        self.pending_submit = None
+        self.logged_submissions = set()
+        self.latest_submission = None
+        self.console_unread = False
+        self.logged_run = None
         self.base = "0"
         self.dirty = False
         self.file_ready = False
@@ -180,6 +186,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(760, 480)
 
         self.save_timer = QTimer(self, singleShot=True, interval=250, timeout=self.flush)
+        self.submit_timer = QTimer(self, singleShot=True, interval=120_000, timeout=self.on_submit_timeout)
         self.watch_timer = QTimer(self, interval=1000, timeout=self.watch_file)
         self.watch_timer.start()
 
@@ -331,20 +338,39 @@ class MainWindow(QMainWindow):
         self.explorer.open_file.connect(self.open_path)
         self.explorer.changed_root.connect(lambda path: self.settings.setValue("explorer/root", path))
         self.explorer_dock = self.make_dock("explorerDock", self.explorer)
-        # Справа одна панель: сверху вывод запущенного файла (только когда он нужен), под ним тесты.
-        # Отдельной панели Debug больше нет
-        right = QSplitter(Qt.Orientation.Vertical)
-        right.setHandleWidth(1)
-        right.setChildrenCollapsible(False)
+        # Справа три отдельные панели-вкладки: «Тесты» (свои и с сайта, запуск на компьютере),
+        # «Статус» (вердикт сайта после отправки) и «Консоль» (вывод запусков и ввод для программы)
+        self.tests_dock = self.make_dock("testsDock", self.tests_panel)
+
+        status_page = QWidget()
+        status_page.setObjectName("statusPage")
+        status_box = QVBoxLayout(status_page)
+        status_box.setContentsMargins(0, 0, 0, 0)
+        status_box.setSpacing(0)
+        self.status_line = QLabel()
+        self.status_line.setObjectName("statusLine")
+        self.status_line.setWordWrap(True)
+        self.status_line.setTextFormat(Qt.TextFormat.PlainText)
+        self.status_line.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.status_line.setContentsMargins(18, 16, 18, 8)
+        status_box.addWidget(self.status_line)
+        status_box.addWidget(self.result_panel.verdict)
+        status_box.addWidget(self.result_panel.diff_host)
+        status_box.addWidget(self.result_panel.submission_tests, 1)
+        self.status_spacer = QWidget()
+        status_box.addWidget(self.status_spacer, 1)
+        self.status_dock = self.make_dock("statusDock", status_page)
+
         self.console = self.result_panel.console
-        self.console.setParent(right)
-        right.addWidget(self.console)
-        right.addWidget(self.tests_panel)
-        right.setSizes([260, 500])
-        self.right_split = right
-        self.console.hide()
+        self.console.layout().insertWidget(1, self.result_panel.browser)
+        self.result_panel.browser.setMaximumHeight(220)
+        self.result_panel.browser.hide()
         self.result_panel.log_hide.clicked.connect(self.hide_console)
-        self.tests_dock = self.make_dock("testsDock", right)
+        self.result_panel.output_added.connect(self.on_console_output)
+        self.console_dock = self.make_dock("consoleDock", self.console)
+        self.console_dock.visibilityChanged.connect(self.on_console_visible)
+        self.status_state = ("empty", "", None)
+        self.notification = VerdictNotification(self)
         self.tests_wanted = None
         self.place_docks()
 
@@ -504,7 +530,8 @@ class MainWindow(QMainWindow):
             self.menus[name] = self.menuBar().addMenu("")
         # Панели в «Вид»: галочка стоит, пока панель открыта
         for dock, name, keys in ((self.sidebar_dock, "toggle_grid", ["Ctrl+B"]),
-                                 (self.explorer_dock, "explorer", ["Ctrl+Shift+E"]), (self.tests_dock, "toggle_tests", [])):
+                                 (self.explorer_dock, "explorer", ["Ctrl+Shift+E"]), (self.tests_dock, "toggle_tests", []),
+                                 (self.status_dock, "status_tab", []), (self.console_dock, "console_tab", [])):
             act = dock.toggleViewAction()
             if keys:
                 act.setShortcuts([QKeySequence(k) for k in keys])
@@ -535,10 +562,15 @@ class MainWindow(QMainWindow):
         self.sidebar_dock.setWindowTitle(t["toggle_grid"])
         self.tests_dock.setWindowTitle(t["tests_tab"])
         self.explorer_dock.setWindowTitle(t["explorer"])
-        for dock in (self.sidebar_dock, self.explorer_dock, self.tests_dock):
+        self.status_dock.setWindowTitle(t["status_tab"])
+        for dock in (self.sidebar_dock, self.explorer_dock, self.tests_dock, self.status_dock):
             dock.titleBarWidget().setText(dock.windowTitle())
         self.explorer.set_texts(t, palette(self.theme))
         self.result_panel.set_texts(t)
+        self.update_console_tab()
+        self.notification.close_btn.setToolTip(t["submit_close"])
+        self.notification.close_btn.setAccessibleName(t["submit_close"])
+        self.set_status(*self.status_state)
         self.hint.setText(t["pick"])
         self.show_tests()
         self.banner_text.setText(t["site_offline"])
@@ -622,6 +654,8 @@ class MainWindow(QMainWindow):
 
         self.update_labels()
         self.render_status()
+        if self.pending_submit and not online:
+            self.submission_error("env-error", self.t["site_offline"])
         self.update_controls()
         self.rebuild_grid()
 
@@ -641,7 +675,7 @@ class MainWindow(QMainWindow):
         self.place.setVisible(bool(place))
 
     def busy_text(self):
-        return self.local_busy or (self.status or {}).get("busy") or ""
+        return self.local_busy or (self.t["submit_sending"] if self.pending_submit else "") or (self.status or {}).get("busy") or ""
 
     def local_tests(self) -> bool:
         """Задачи с вводом и выводом проверяются тестами прямо в окне, без сайта."""
@@ -676,8 +710,7 @@ class MainWindow(QMainWindow):
             self.tests_wanted = has_tests if self.task else None
         elif has_tests != self.tests_wanted:  # прячем тесты только при смене задачи, а не после закрытия руками
             self.tests_wanted = has_tests
-            self.tests_panel.setVisible(has_tests or not self.console.isVisible())
-            self.tests_dock.setVisible(has_tests or self.console.isVisible())
+            self.tests_dock.setVisible(has_tests)
         self.stop_btn.setToolTip("Shift+F5")
         self.busy.setText(self.busy_text())
 
@@ -692,6 +725,14 @@ class MainWindow(QMainWindow):
         if changed:
             self.key = key
             self.status = None
+            self.pending_submit = None
+            self.submit_timer.stop()
+            self.latest_submission = None
+            self.logged_run = None
+            self.result_panel.show_submission_tests([], self.t, palette(self.theme))
+            self.result_panel.verdict.hide()
+            self.result_panel.diff_host.hide()
+            self.set_status("empty")
             self.title.setText(current.get("title", ""))
             self.test_results = {}
             self.load_file(fresh=True)
@@ -764,6 +805,8 @@ class MainWindow(QMainWindow):
             return
         code, data = self.api.file(self.key)
         if code != 200:
+            if self.pending_submit:
+                self.submission_error("bridge-unreachable" if code == 0 else str(code), data.get("error", ""))
             return
         if not self.file_ready:
             self.load_file(fresh=True)
@@ -783,7 +826,7 @@ class MainWindow(QMainWindow):
             return
         self.save_timer.stop()
         self.flush()
-        self.api.command(kind, key=self.key, **extra)
+        return self.api.command(kind, key=self.key, **extra)
 
     def run(self):
         if not self.run_btn.isEnabled():
@@ -850,7 +893,17 @@ class MainWindow(QMainWindow):
                                     self.delete_test, self.reset_test, hidden, self.restore_tests)
         for index, (verdict, title, res) in self.test_results.items():
             if index < len(self.tests_panel.cards):
-                self.tests_panel.cards[index].set_result(verdict, title, res)
+                self.show_test_result(index, verdict, title, res)
+
+    def show_test_result(self, index: int, verdict: str, title: str, res: dict):
+        card = self.tests_panel.cards[index]
+        card.set_result(verdict, title, res)
+        name = res.get("status") if res.get("status") in ("env-error", "cancelled") else verdict
+        label = self.t.get("verdict_" + name.lower().replace("-", "_"), title)
+        symbol = "✅" if verdict == "OK" else "❌" if verdict == "WA" else "⚠"
+        card.verdict.setText(f"{symbol} {label}" if verdict else "")
+        card.verdict.setToolTip(label)
+
 
     def add_test(self):
         if not self.task:
@@ -972,7 +1025,7 @@ class MainWindow(QMainWindow):
         self.result_panel.log(head, res.get("stdout") or "", "\n".join(x for x in (res.get("stderr"), res.get("error")) if x),
                               palette(self.theme))
         if index < len(self.tests_panel.cards):
-            self.tests_panel.cards[index].set_result(verdict, title, res)
+            self.show_test_result(index, verdict, title, res)
 
     def on_tests_finished(self):
         self.local_busy = ""
@@ -989,7 +1042,82 @@ class MainWindow(QMainWindow):
         if self.submit_btn.isEnabled() and self.submit_btn.isVisible():
             self.show_output()
             self.show_result_tab()
-            self.send("submit")
+            self.pending_submit = self.key
+            self.submit_timer.start()
+            self.result_panel.show_submission_tests([], self.t, palette(self.theme))
+            self.result_panel.verdict.hide()
+            self.result_panel.diff_host.hide()
+            self.set_status("sending")
+            self.result_panel.write(f'\n──────────\n[{time.strftime("%H:%M:%S")}] {self.t["submit_sending"]}\n')
+            self.update_controls()
+            try:
+                result = self.send("submit")
+                code, data = result if isinstance(result, tuple) and len(result) == 2 else (0, {})
+                data = data if isinstance(data, dict) else {}
+                if code != 200:
+                    self.submission_error("bridge-unreachable" if code == 0 else str(code), data.get("error", ""))
+            except Exception as error:
+                self.submission_error("env-error", str(error))
+
+    def on_submit_timeout(self):
+        if self.pending_submit:
+            self.submission_error("timeout", self.t["submit_timeout"])
+
+    def submission_error(self, code: str, message: str = ""):
+        self.submit_timer.stop()
+        text = self.t["submit_error_log"].format(code=code, message=f" — {message}" if message else "")
+        self.result_panel.write(f'[{time.strftime("%H:%M:%S")}] {text}\n', palette(self.theme)["rose"])
+        self.result_panel.write(self.t["submit_send_error"] + "\n", palette(self.theme)["rose"])
+        self.notification.show_verdict(self.t["submit_send_error"], False, palette(self.theme))
+        self.set_status("verdict", f'{self.t["submit_send_error"]}\n{text}', False)
+        self.show_status_tab()
+        self.pending_submit = None
+        self.status = None
+        self.update_controls()
+
+    def complete_submission(self, submission: dict):
+        self.submit_timer.stop()
+        tests = submission.get("tests") or []
+        accepted = submission.get("accepted", False)
+        summary = submission.get("summary", "")
+        passed = sum(test.get("verdict") == "OK" for test in tests)
+        lines = []
+        for test in tests:
+            verdict = test.get("verdict", "")
+            if verdict == "skipped":
+                continue
+            label = self.t["submit_console_test" if test.get("sample") else "submit_console_hidden_test"].format(n=test["n"])
+            symbol = "✅" if verdict == "OK" else "❌" if verdict == "WA" else "⚠"
+            name = self.t.get("verdict_" + verdict.lower().replace("-", "_"), verdict)
+            lines.append(f"{label}: {symbol} {name}")
+            if verdict in ("CE", "RE") and test.get("error"):
+                lines.append(test["error"])
+            if verdict != "OK":
+                lines.append(self.t["submit_stopped"].format(n=test["n"]))
+                break
+        error = submission.get("error")
+        if error or summary == "env-error":
+            error = error or {"code": "env-error"}
+            message = error.get("message")
+            text = self.t["submit_error_log"].format(code=error["code"], message=f" — {message}" if message else "")
+            lines.append(f'[{time.strftime("%H:%M:%S")}] {text}')
+            verdict = self.t["submit_send_error"]
+            lines.append(verdict)
+        elif summary == "CE":
+            verdict = self.t["submit_compile_error"]
+            lines.append(verdict)
+        elif summary == "cancelled":
+            verdict = "❌ " + self.t["verdict_cancelled"]
+            lines.append(verdict)
+        else:
+            final = self.t["submit_accepted"] if accepted else self.t["submit_unsolved"]
+            verdict = self.t["submit_rejected"].format(passed=passed, total=len(tests)) if tests and not accepted else final
+            lines.append(self.t["submit_summary"].format(passed=passed, total=len(tests), verdict=final) if tests else final)
+        self.result_panel.write("\n".join(lines) + "\n", palette(self.theme)["fg2"])
+        self.notification.show_verdict(verdict, accepted, palette(self.theme))
+        self.set_status("verdict", verdict, accepted)
+        self.show_status_tab()
+        self.pending_submit = None
 
     def runnable_doc(self):
         doc = self.cur_doc() if hasattr(self, "doc_tabs") else None
@@ -1120,13 +1248,15 @@ class MainWindow(QMainWindow):
         return dock
 
     def place_docks(self):
-        """Расположение по умолчанию: курсы слева, справа тесты и под ними Debug."""
+        """Расположение по умолчанию: курсы слева, справа вкладки «Тесты», «Статус», «Консоль»."""
         work, left, right = self.work, Qt.DockWidgetArea.LeftDockWidgetArea, Qt.DockWidgetArea.RightDockWidgetArea
-        for dock, area in ((self.sidebar_dock, left), (self.explorer_dock, left), (self.tests_dock, right)):
+        for dock, area in ((self.sidebar_dock, left), (self.explorer_dock, left), (self.tests_dock, right),
+                           (self.status_dock, right), (self.console_dock, right)):
             dock.setFloating(False)
             work.addDockWidget(area, dock)
             dock.show()
         work.tabifyDockWidget(self.sidebar_dock, self.explorer_dock)
+        self.tab_right_docks()
         self.sidebar_dock.raise_()
         work.resizeDocks([self.sidebar_dock, self.tests_dock], [230, 420], Qt.Orientation.Horizontal)
         self.tests_wanted = None
@@ -1134,28 +1264,67 @@ class MainWindow(QMainWindow):
             self.update_controls()
         self.tests_dock.raise_()
 
+    def tab_right_docks(self):
+        """«Статус» и «Консоль» — вкладки рядом с «Тестами»."""
+        self.work.tabifyDockWidget(self.tests_dock, self.status_dock)
+        self.work.tabifyDockWidget(self.status_dock, self.console_dock)
+
     def show_output(self):
-        pass  # результат отправки виден в строке под редактором
+        pass  # результат отправки виден во вкладке «Статус»
 
     def show_result_tab(self):
-        pass
+        self.show_status_tab()
+
+    def show_status_tab(self):
+        self.status_dock.show()
+        self.status_dock.raise_()
 
     def show_console(self):
-        """Вывод программы над тестами: появляется при запуске файла или выводе с сайта."""
-        self.console.show()
-        self.tests_panel.setVisible(self.local_tests())
-        self.tests_dock.show()
-        self.tests_dock.raise_()
+        """Открывает вкладку «Консоль»: вывод запусков и ввод для программы."""
+        self.console_dock.show()
+        self.console_dock.raise_()
 
     def hide_console(self):
-        self.console.hide()
-        self.tests_panel.show()
-        if not self.local_tests():
-            self.tests_dock.hide()
+        self.console_dock.hide()
 
     def show_tests_tab(self):
         self.tests_dock.show()
         self.tests_dock.raise_()
+
+    def update_console_tab(self):
+        self.console_dock.setWindowTitle(self.t["console_tab"] + (" ●" if self.console_unread else ""))
+        self.console_dock.titleBarWidget().setText(self.t["console_tab"])
+
+    def console_seen(self) -> bool:
+        return self.console_dock.isVisible() and not self.console_dock.visibleRegion().isEmpty()
+
+    def on_console_output(self):
+        if not self.console_seen():
+            self.console_unread = True
+            self.update_console_tab()
+
+    def on_console_visible(self, visible: bool):
+        if visible and self.console_unread:
+            self.console_unread = False
+            self.update_console_tab()
+
+    def set_status(self, kind: str, text: str = "", accepted=None):
+        """Вкладка «Статус»: пусто / отправка / вердикт сайта."""
+        self.status_state = (kind, text, accepted)
+        c = palette(self.theme)
+        if kind == "empty":
+            text, color = self.t["status_empty"], c["mute"]
+        elif kind == "sending":
+            text, color = self.t["submit_sending"], c["mute"]
+        else:
+            color = c["done"] if accepted else c["rose"]
+        self.status_line.setText(text)
+        size = "13px" if kind in ("empty", "sending") else "17px"
+        weight = 400 if kind in ("empty", "sending") else 700
+        self.status_line.setStyleSheet(f"color: {color}; font-size: {size}; font-weight: {weight};")
+        has_rows = kind != "empty" and self.result_panel.submission_rows.count() > 1
+        self.result_panel.submission_tests.setVisible(has_rows)
+        self.status_spacer.setVisible(not has_rows)
 
     def zoom_in(self):
         self.cur().zoomIn(1)
@@ -1353,16 +1522,59 @@ class MainWindow(QMainWindow):
         sig = json.dumps([s, self.theme, self.locale], sort_keys=True)
         if sig == self.status_sig:
             return
+        if self.pending_submit and (s or {}).get("busy"):
+            self.submit_timer.start()
         had_result = self.status_sig is not None
         self.status_sig = sig
-        self.run_time.setText(self.result_panel.show_status(s, self.t, palette(self.theme)))
+        c = palette(self.theme)
+        submission = (s or {}).get("submit")
+        presentation = dict(s or {})
+        if submission:
+            failed = next((test for test in submission.get("tests", []) if test.get("verdict") not in ("OK", "skipped")), None)
+            if failed and not failed.get("sample"):
+                presentation["diff"] = None
+        self.run_time.setText(self.result_panel.show_status(presentation, self.t, c, images_only=True))
         run = (s or {}).get("run")
-        if run and not (s or {}).get("busy"):
+        self.result_panel.browser.setVisible(bool(run and run.get("images") and not submission))
+        if submission:
+            self.latest_submission = submission
+            self.result_panel.show_submission_tests(submission.get("tests") or [], self.t, c)
+            if submission["id"] not in self.logged_submissions:
+                self.logged_submissions.add(submission["id"])
+                self.complete_submission(submission)
+        elif (s or {}).get("tests"):
+            tests = [{**test, "verdict": "skipped" if test.get("verdict") == "—" else test.get("verdict", "")}
+                     for test in s["tests"]]
+            self.result_panel.show_submission_tests(tests, self.t, c)
+        if not submission and self.pending_submit and (s or {}).get("result") and not s.get("busy"):
+            result = s["result"]
+            accepted = result.get("tone") == "ok"
+            title = self.t["submit_accepted"] if accepted else result.get("title") or self.t["submit_unsolved"]
+            self.result_panel.write(title + "\n", c["fg2"])
+            self.notification.show_verdict(title, accepted, c)
+            self.set_status("verdict", title, accepted)
+            self.show_status_tab()
+            self.pending_submit = None
+            self.submit_timer.stop()
+        else:
+            self.set_status(*self.status_state)
+        # Вердикт сайта без отправки из окна (например, нажали «Проверить» на сайте) — тоже во вкладке «Статус»
+        if self.status_state[0] == "empty":
+            self.status_line.setVisible(self.result_panel.verdict.isHidden())
+        else:
+            self.status_line.show()
+        run_sig = json.dumps(run, sort_keys=True) if run else None
+        if not run or (s or {}).get("busy"):
+            self.logged_run = None
+        if run and not submission and not (s or {}).get("busy") and run_sig != self.logged_run:
+            self.logged_run = run_sig
             title = " · ".join(x for x in (self.t["log_site_run"], run.get("label"), run.get("time")) if x)
-            self.result_panel.log(title, run.get("stdout") or "", run.get("stderr") or "", palette(self.theme))
-        elif (s or {}).get("error"):
-            self.result_panel.log((s.get("result") or {}).get("title") or self.t["stderr"], "", s["error"], palette(self.theme))
-        if had_result and s and (s.get("run") or s.get("error")) and not s.get("busy"):
+            self.result_panel.log(title, run.get("stdout") or "", run.get("stderr") or "", c)
+        elif not submission and (s or {}).get("error"):
+            tests = s.get("tests") or []
+            if not tests or any(test.get("verdict") in ("CE", "RE") for test in tests):
+                self.result_panel.log((s.get("result") or {}).get("title") or self.t["stderr"], "", s["error"], c)
+        if had_result and not submission and s and (s.get("run") or s.get("error")) and not s.get("busy"):
             self.show_console()
 
     # --- справка ---
@@ -1407,24 +1619,29 @@ class MainWindow(QMainWindow):
         value = s.value("docks")
         if value is not None:
             self.work.restoreState(value, DOCKS_VERSION)
+            # В раскладке из прошлых версий нет вкладок «Статус» и «Консоль»: ставим их рядом с «Тестами»,
+            # остальное оставляем, как ученик расставил
+            if not s.value("status_console_docks"):
+                for dock in (self.status_dock, self.console_dock):
+                    dock.setFloating(False)
+                    dock.show()
+                self.tab_right_docks()
+                self.tests_dock.raise_()
+        s.setValue("status_console_docks", True)
         zoom = s.value("zoom")
         if zoom is not None:
             self.editor.set_zoom(int(zoom))
-        value = s.value("right_split")
-        if value is not None:
-            self.right_split.restoreState(value)
 
     def save_layout(self):
         """Положение окна, панелей, размеры и открытые файлы; пишет только когда что-то изменилось."""
         s = self.settings
         layout = (bytes(self.saveGeometry()), bytes(self.work.saveState(DOCKS_VERSION)),
-                  bytes(self.right_split.saveState()), self.editor.get_zoom(), json.dumps(self.session()))
+                  self.editor.get_zoom(), json.dumps(self.session()))
         if layout == self.layout_saved:
             return
         self.layout_saved = layout
         s.setValue("geometry", self.saveGeometry())
         s.setValue("docks", self.work.saveState(DOCKS_VERSION))
-        s.setValue("right_split", self.right_split.saveState())
         s.setValue("zoom", self.editor.get_zoom())
         s.setValue("session", json.dumps(self.session(), ensure_ascii=False))
 
