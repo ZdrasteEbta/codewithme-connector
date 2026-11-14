@@ -342,6 +342,17 @@ func (s *Server) serveApp(w http.ResponseWriter, r *http.Request) {
 		req.Window, req.Images, req.Check, req.Tests, req.Crates = false, false, nil, nil, nil
 		req.Label = "тест в IDE"
 		res := s.ws.Run(req, s.runs)
+		if req.Language == "javascript" || req.Language == "node" {
+			// console.log в обёртке Node приходит в Output, а окно тестов читает Stdout: склеиваем,
+			// а ошибку программы при статусе ok считаем падением (как на сайте)
+			if res.Output != "" {
+				res.Stdout += res.Output + "\n"
+				res.Output = ""
+			}
+			if res.Status == "ok" && res.Error != "" {
+				res.Status = "re"
+			}
+		}
 		reply(200, res)
 
 	case r.Method == http.MethodPost && r.URL.Path == "/app/run-file":

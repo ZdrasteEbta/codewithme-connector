@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-var version = "0.6.6" // Р·Р°РјРµРЅСЏРµС‚СЃСЏ РїСЂРё СЃР±РѕСЂРєРµ СЂРµР»РёР·Р°: -ldflags "-X main.version=вЂ¦"
+var version = "0.6.7" // Р·Р°РјРµРЅСЏРµС‚СЃСЏ РїСЂРё СЃР±РѕСЂРєРµ СЂРµР»РёР·Р°: -ldflags "-X main.version=вЂ¦"
 
 const site = "https://codewithme.app"
 
